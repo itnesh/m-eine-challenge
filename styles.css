@@ -279,3 +279,18 @@ td strong { white-space: nowrap; }
 .setup-fields { display: flex; flex-wrap: wrap; gap: 16px; }
 .setup-fields label { display: grid; gap: 6px; font-weight: 750; }
 @media (max-width: 560px) { .team-form { flex-direction: column; } }
+
+/* Spielübersicht */
+.rules-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 30px; }
+.rules-card { position: relative; padding: 26px 26px 20px; border: 1px solid var(--line); border-radius: 20px; background: white; box-shadow: 0 8px 28px rgba(44,36,27,.05); }
+.rules-card.current { border-color: var(--orange); box-shadow: 0 0 0 3px rgba(243,111,33,.12); }
+.rules-card h2 { margin: 0 0 6px; font-size: 24px; }
+.rules-card h3 { margin: 20px 0 8px; color: var(--orange-dark); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+.rules-tagline { margin: 0; color: var(--muted); line-height: 1.5; }
+.rules-list { margin: 0; padding-left: 18px; line-height: 1.55; }
+.rules-list li + li { margin-top: 6px; }
+.rules-badge { position: absolute; top: 18px; right: 18px; padding: 5px 9px; border-radius: 999px; color: white; background: var(--orange); font-size: 11px; font-weight: 800; }
+.rules-general { margin-top: 18px; }
+@media (max-width: 900px) { .rules-grid { grid-template-columns: 1fr; } }
+.nav-link { white-space: nowrap; }
+@media (max-width: 420px) { .nav-link { padding: 8px 10px; font-size: 13px; } }

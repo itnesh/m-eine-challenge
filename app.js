@@ -315,6 +315,7 @@ function render() {
   loginScreen.classList.add("hidden");
   if (activeView === "leaderboard") renderLeaderboardPage();
   else if (activeView === "history") renderHistoryPage();
+  else if (activeView === "rules") renderRulesPage();
   else if (inGame) renderGame();
   else renderHome();
   startVisibleTimer();
@@ -919,6 +920,73 @@ function saveNextWeek() {
 function renderLeaderboardPage() {
   const scores = evergreenScores(Boolean(state.current.results));
   app.innerHTML = `<section><p class="eyebrow">EVERGREEN</p><h1>Die ewige Rangliste</h1><p class="lead">Alle Challenge-Punkte aus den gespeicherten Wochen.</p><div style="margin-top:32px">${renderScoreList(scores)}</div></section>`;
+}
+
+const RULES = [
+  {
+    game: "ABCD-Jagd",
+    tagline: "Drei Buchstaben. Drei Gegenstände. Wer ist am schnellsten?",
+    steps: [
+      "Die Spielleitung startet die Runde. Drei zufällige Buchstaben erscheinen gleichzeitig bei allen.",
+      "Schreibe zu jedem Buchstaben einen konkreten Gegenstand auf, der mit diesem Buchstaben beginnt.",
+      "Tastaturtasten zählen nicht als Gegenstand.",
+      "Wer alle drei Begriffe hat, stoppt die Runde mit Enter, Tab oder „Fertig – Runde stoppen“. Die Runde endet dann für alle."
+    ],
+    scoring: [
+      "Die Spielleitung bewertet jeden Begriff: ✓ eigener korrekter Begriff (1), ½ von mehreren genannt (0,5), × falsch oder leer (0).",
+      "Schnell eingegebene gültige Begriffe geben einen kleinen Zeitbonus.",
+      "Rangpunkte: Platz 1 = 6, Platz 2 = 5 … bis 0. Gleichstand = gleiche Punkte."
+    ]
+  },
+  {
+    game: "Stadt–Land–Fluss",
+    tagline: "Der Klassiker – mit Zusatzkategorien der Spielleitung.",
+    steps: [
+      "Stadt, Land und Fluss sind fix. Die Spielleitung kann weitere Kategorien ergänzen (z. B. Beruf, Tier).",
+      "Die Spielleitung dreht den Buchstaben (ohne X, Y, Z) und gibt das GO für alle.",
+      "Fülle zu jeder Kategorie einen Begriff mit dem Buchstaben aus.",
+      "Wer alle Felder hat, stoppt die Runde mit Enter, Tab oder „Fertig – Runde stoppen“."
+    ],
+    scoring: [
+      "Bewertung pro Begriff wie bei der ABCD-Jagd: ✓ = 1, ½ = 0,5, × = 0. Gleiche Begriffe werden automatisch als ½ vorgeschlagen.",
+      "Schnelle gültige Begriffe geben einen Zeitbonus.",
+      "Rangpunkte: Platz 1 = 6, Platz 2 = 5 … bis 0."
+    ]
+  },
+  {
+    game: "Stiller Held",
+    tagline: "Wer hat diese Woche im Hintergrund am meisten bewegt?",
+    steps: [
+      "Die Spielleitung eröffnet die Abstimmung.",
+      "Jede Person gibt geheim genau eine Stimme ab – auch für sich selbst, wenn sie will.",
+      "Die Stimme kann bis zum Abschluss geändert werden.",
+      "Die Spielleitung schliesst die Abstimmung."
+    ],
+    scoring: [
+      "Die Person mit den meisten Stimmen erhält 6 Punkte, alle anderen 0.",
+      "Bei Gleichstand entscheidet die Spielleitung zwischen den Bestplatzierten."
+    ]
+  }
+];
+
+function renderRulesPage() {
+  const list = items => `<ul class="rules-list">${items.map(item => `<li>${esc(item)}</li>`).join("")}</ul>`;
+  app.innerHTML = `<section><p class="eyebrow">SPIELÜBERSICHT</p><h1>Spiele & Regeln</h1><p class="lead">Jede Woche ein Spiel, eine Spielleitung. Die Spielleitung spielt immer mit.</p>
+    <div class="rules-grid">${RULES.map(rule => `
+      <article class="rules-card ${rule.game === state.current.game ? "current" : ""}">
+        ${rule.game === state.current.game ? `<span class="rules-badge">Diese Woche</span>` : ""}
+        <h2>${esc(rule.game)}</h2><p class="rules-tagline">${esc(rule.tagline)}</p>
+        <h3>Ablauf</h3>${list(rule.steps)}
+        <h3>Punkte</h3>${list(rule.scoring)}
+      </article>`).join("")}</div>
+    <article class="rules-card rules-general"><h2>Wochenablauf</h2>${list([
+      "Alle öffnen den Link und wählen ihren Namen. Die Startseite zeigt Spiel und Spielleitung der Woche.",
+      "Nur die Spielleitung startet, bewertet und schliesst ab – spielt aber selbst mit.",
+      "Nach dem Spiel: Tagesrangliste und ewige Rangliste (Summe aller Wochen).",
+      "Danach werden Spiel und Spielleitung für nächste Woche separat ausgelost. Das aktuelle Spiel und die aktuelle Leitung pausieren eine Woche.",
+      "Abwesende (Ferien etc.) kann die Spielleitung vor der Auslosung abwählen."
+    ])}</article>
+  </section>`;
 }
 
 function renderHistoryPage() {
