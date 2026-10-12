@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f36f21">
+  <title>M-eine Challenge</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="brand" type="button" data-nav="home" aria-label="Zur Startseite">
+      <span class="brand-m">M</span><span>-eine Challenge</span>
+    </button>
+    <nav class="nav" aria-label="Hauptnavigation">
+      <button class="nav-link active" type="button" data-nav="home">Diese Woche</button>
+      <button class="nav-link" type="button" data-nav="leaderboard">Rangliste</button>
+      <button class="nav-link" type="button" data-nav="history">Wochen</button>
+    </nav>
+    <div class="user-area" id="user-area"></div>
+  </header>
+
+  <main class="app-shell" id="app" aria-live="polite"></main>
+
+  <section class="login-screen" id="login-screen" aria-labelledby="login-title">
+    <div class="login-card">
+      <div class="login-brand"><span>M</span>-eine Challenge</div>
+      <p class="eyebrow">TEAM-LOGIN</p>
+      <h1 id="login-title">Wer bist du?</h1>
+      <p id="login-intro">Wähle deinen Namen.</p>
+      <div class="login-grid" id="login-grid"></div>
+      <p class="login-note">Login ohne Passwort, geschützt durch den Teamcode.</p>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="firebase-config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
