@@ -58,6 +58,16 @@ async function firebaseStore(config, team, freshState) {
       if (!pairs.length) return;
       const args = pairs.flatMap(([path, value]) => [new fs.FieldPath(...path), value]);
       await fs.updateDoc(ref, ...args);
+    },
+    subscribeDrawings(onDrawings, onError) {
+      return fs.onSnapshot(fs.collection(ref, "drawings"), snap => {
+        const out = {};
+        snap.forEach(item => { out[item.id] = item.data(); });
+        onDrawings(out);
+      }, onError);
+    },
+    async saveDrawing(person, data) {
+      await fs.setDoc(fs.doc(ref, "drawings", person), clean(data));
     }
   };
 }
@@ -69,6 +79,7 @@ function mockStore(team, freshState) {
   const read = () => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
   const write = data => { localStorage.setItem(key, JSON.stringify(data)); channel.postMessage(data); };
   let listener = null;
+  let drawingListener = null;
   channel.onmessage = event => listener?.(event.data);
   return {
     mode: "mock",
@@ -96,6 +107,24 @@ function mockStore(team, freshState) {
       }
       write(data);
       listener?.(read());
+    },
+    subscribeDrawings(onDrawings) {
+      const dkey = `${key}-drawings`;
+      const dchannel = new BroadcastChannel(dkey);
+      const readAll = () => { try { return JSON.parse(localStorage.getItem(dkey)) || {}; } catch { return {}; } };
+      dchannel.onmessage = () => onDrawings(readAll());
+      drawingListener = () => onDrawings(readAll());
+      setTimeout(drawingListener, 0);
+      return () => dchannel.close();
+    },
+    async saveDrawing(person, data) {
+      const dkey = `${key}-drawings`;
+      let all = {};
+      try { all = JSON.parse(localStorage.getItem(dkey)) || {}; } catch { /* leer */ }
+      all[person] = clean(data);
+      localStorage.setItem(dkey, JSON.stringify(all));
+      new BroadcastChannel(dkey).postMessage(1);
+      drawingListener?.();
     }
   };
 }

@@ -5,8 +5,16 @@ service cloud.firestore {
     match /teams/{team} {
       allow get: if team == 'TEAMCODE';
       allow create, update: if team == 'TEAMCODE'
-        && request.resource.data.keys().hasOnly(['version', 'members', 'history', 'current']);
+        && request.resource.data.keys().hasOnly(['version', 'members', 'history', 'current', 'inventions']);
       allow list, delete: if false;
+
+      match /drawings/{person} {
+        allow read: if team == 'TEAMCODE';
+        allow create, update: if team == 'TEAMCODE'
+          && request.resource.data.image is string
+          && request.resource.data.image.size() < 900000;
+        allow delete: if false;
+      }
     }
   }
 }

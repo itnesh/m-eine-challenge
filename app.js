@@ -1,7 +1,8 @@
 import { createStore } from "./store.js";
 
 const PEOPLE = ["Ueli", "Pirmin", "Eric", "Terry", "Markus", "Sinthu", "Matthias", "Gui", "Fabio", "Elias"];
-const GAMES = ["ABCD-Jagd", "Stadt–Land–Fluss", "Stiller Held"];
+const GAMES = ["ABCD-Jagd", "Stadt–Land–Fluss", "Stiller Held", "Live-Cooking", "Dümmste Erfindung", "Draw the Picture", "Podcast", "Dingsbums"];
+const CUSTOM_GAMES = ["Live-Cooking", "Dümmste Erfindung", "Draw the Picture", "Podcast", "Dingsbums"];
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVW".split("");
 const SESSION_KEY = "m-eine-challenge-user-v5";
 const TEAM_KEY = "m-eine-challenge-team-v5";
@@ -69,6 +70,11 @@ function freshState() {
       votes: {},
       tieCandidates: [],
       results: null,
+      entries: {},
+      verdict: {},
+      pick: null,
+      participants: null,
+      secret: { sentence: "", variant: "" },
       draw: { game: null, host: null }
     }
   };
@@ -80,8 +86,9 @@ function normalizeState(data) {
   next.members = next.members || {};
   next.history = Array.isArray(next.history) ? next.history : [];
   next.current = { ...base.current, ...(next.current || {}) };
-  ["drafts", "reviews", "votes"].forEach(key => { next.current[key] = next.current[key] || {}; });
+  ["drafts", "reviews", "votes", "entries", "verdict"].forEach(key => { next.current[key] = next.current[key] || {}; });
   next.current.draw = next.current.draw || { game: null, host: null };
+  next.current.secret = next.current.secret || { sentence: "", variant: "" };
   return next;
 }
 
@@ -129,10 +136,12 @@ function renderKey() {
 }
 
 function onRemoteState(data) {
+  if (state.current.game === "Draw the Picture" && document.querySelector("#draw-canvas") && state.current.phase === "play") storeLocalCanvas();
   state = normalizeState(data);
   connected = true;
-  const typing = document.activeElement?.matches("[data-term-cat],[data-abcd-term],#new-category");
-  if (typing && renderKey() === lastRenderedKey) return;
+  trackPhase();
+  const typing = document.activeElement?.matches("[data-term-cat],[data-abcd-term],#new-category,[data-keep-focus]");
+  if ((typing || canvasBusy()) && renderKey() === lastRenderedKey) return;
   render();
 }
 
@@ -142,7 +151,9 @@ async function connect() {
   if (!teamCode) return renderLogin();
   try {
     store = await createStore(teamCode, freshState);
-    unsubscribe = store.subscribe(onRemoteState, reportError);
+    const offState = store.subscribe(onRemoteState, reportError);
+    const offDrawings = store.subscribeDrawings(onDrawings, reportError);
+    unsubscribe = () => { offState?.(); offDrawings?.(); };
     if (currentUser) markPresent(currentUser);
   } catch (error) {
     reportError(error);
@@ -213,7 +224,7 @@ function isHost() {
 }
 
 function phaseLabel() {
-  return ({ lobby: "Warteraum", play: "Läuft gerade", review: "Auswertung", results: "Resultate", draw: "Auslosung" })[state.current.phase] || "Diese Woche";
+  return ({ lobby: "Warteraum", play: "Läuft gerade", vote: "Abstimmung", review: "Auswertung", results: "Resultate", draw: "Auslosung" })[state.current.phase] || "Diese Woche";
 }
 
 function showToast(message) {
@@ -319,6 +330,7 @@ function render() {
   else if (inGame) renderGame();
   else renderHome();
   startVisibleTimer();
+  mountCanvas();
 }
 
 function renderHome() {
@@ -386,6 +398,7 @@ app.addEventListener("click", event => {
   if (action === "draw-game") drawNext("game");
   if (action === "draw-host") drawNext("host");
   if (action === "save-next-week") saveNextWeek();
+  handleCustomAction(action, event);
 });
 
 app.addEventListener("change", event => {
@@ -464,6 +477,7 @@ function confirmCompletedRound() {
 
 function renderGame() {
   const phase = state.current.phase;
+  if (CUSTOM_GAMES.includes(state.current.game) && phase !== "results" && phase !== "draw") return renderCustomGame();
   if (phase === "lobby") renderLobby();
   else if (phase === "play") renderPlay();
   else if (phase === "review") renderReview();
@@ -471,8 +485,13 @@ function renderGame() {
   else renderDraw();
 }
 
+function shareHint() {
+  if (!isHost() || !["review", "results", "draw"].includes(state.current.phase)) return "";
+  return `<div class="share-hint"><strong>📺 Jetzt Bildschirm teilen</strong><span>Zeige dem Team ab hier ${state.current.phase === "draw" ? "die Auslosung für nächste Woche" : state.current.phase === "review" ? "die Auswertung bzw. den Vergleich" : "das Resultat"}.</span></div>`;
+}
+
 function gameTop(label, title) {
-  return `<div class="game-top"><div><p class="eyebrow">${label}</p><h2>${title}</h2><span class="role-badge">${isHost() ? "Du bist die Spielleitung" : `Spielleitung: ${esc(state.current.host)}`}</span></div><button class="button ghost" type="button" data-action="back-home">Zur Startseite</button></div>`;
+  return `${shareHint()}<div class="game-top"><div><p class="eyebrow">${label}</p><h2>${title}</h2><span class="role-badge">${isHost() ? "Du bist die Spielleitung" : `Spielleitung: ${esc(state.current.host)}`}</span></div><button class="button ghost" type="button" data-action="back-home">Zur Startseite</button></div>`;
 }
 
 function renderLobby() {
@@ -877,7 +896,7 @@ function renderDraw() {
   const draw = state.current.draw || { game:null, host:null };
   const gameChoices = GAMES.filter(game => game !== state.current.game);
   const hostPool = Array.isArray(draw.hostPool) ? draw.hostPool : PEOPLE.filter(person => person !== state.current.host);
-  app.innerHTML = `<section>
+  app.innerHTML = `${shareHint()}<section>
     <div class="section-heading"><div><p class="eyebrow">KOMMENDE WOCHE</p><h1>Das Rad entscheidet</h1></div><p>Spiel und Spielleitung werden separat gezogen. Das aktuelle Spiel und die aktuelle Leitung pausieren eine Woche.</p></div>
     <div class="draw-grid">
       <article class="panel draw-card"><h3>Welches Spiel?</h3><div class="wheel" id="game-wheel"><span>${draw.game ? esc(draw.game.charAt(0)) : "?"}</span></div><p class="draw-result">${esc(draw.game || "Noch nicht ausgelost")}</p><p class="draw-options">Zur Auswahl: ${gameChoices.map(esc).join(" · ")}</p>${isHost() ? `<button class="button secondary" type="button" data-action="draw-game">Spiel auslosen</button>` : ""}</article>
@@ -923,69 +942,52 @@ function renderLeaderboardPage() {
 }
 
 const RULES = [
-  {
-    game: "ABCD-Jagd",
-    tagline: "Drei Buchstaben. Drei Gegenstände. Wer ist am schnellsten?",
-    steps: [
-      "Die Spielleitung startet die Runde. Drei zufällige Buchstaben erscheinen gleichzeitig bei allen.",
-      "Schreibe zu jedem Buchstaben einen konkreten Gegenstand auf, der mit diesem Buchstaben beginnt.",
-      "Tastaturtasten zählen nicht als Gegenstand.",
-      "Wer alle drei Begriffe hat, stoppt die Runde mit Enter, Tab oder „Fertig – Runde stoppen“. Die Runde endet dann für alle."
-    ],
-    scoring: [
-      "Die Spielleitung bewertet jeden Begriff: ✓ eigener korrekter Begriff (1), ½ von mehreren genannt (0,5), × falsch oder leer (0).",
-      "Schnell eingegebene gültige Begriffe geben einen kleinen Zeitbonus.",
-      "Rangpunkte: Platz 1 = 6, Platz 2 = 5 … bis 0. Gleichstand = gleiche Punkte."
-    ]
-  },
-  {
-    game: "Stadt–Land–Fluss",
-    tagline: "Der Klassiker – mit Zusatzkategorien der Spielleitung.",
-    steps: [
-      "Stadt, Land und Fluss sind fix. Die Spielleitung kann weitere Kategorien ergänzen (z. B. Beruf, Tier).",
-      "Die Spielleitung dreht den Buchstaben (ohne X, Y, Z) und gibt das GO für alle.",
-      "Fülle zu jeder Kategorie einen Begriff mit dem Buchstaben aus.",
-      "Wer alle Felder hat, stoppt die Runde mit Enter, Tab oder „Fertig – Runde stoppen“."
-    ],
-    scoring: [
-      "Bewertung pro Begriff wie bei der ABCD-Jagd: ✓ = 1, ½ = 0,5, × = 0. Gleiche Begriffe werden automatisch als ½ vorgeschlagen.",
-      "Schnelle gültige Begriffe geben einen Zeitbonus.",
-      "Rangpunkte: Platz 1 = 6, Platz 2 = 5 … bis 0."
-    ]
-  },
-  {
-    game: "Stiller Held",
-    tagline: "Wer hat diese Woche im Hintergrund am meisten bewegt?",
-    steps: [
-      "Die Spielleitung eröffnet die Abstimmung.",
-      "Jede Person gibt geheim genau eine Stimme ab – auch für sich selbst, wenn sie will.",
-      "Die Stimme kann bis zum Abschluss geändert werden.",
-      "Die Spielleitung schliesst die Abstimmung."
-    ],
-    scoring: [
-      "Die Person mit den meisten Stimmen erhält 6 Punkte, alle anderen 0.",
-      "Bei Gleichstand entscheidet die Spielleitung zwischen den Bestplatzierten."
-    ]
-  }
+  { game: "ABCD-Jagd", tagline: "Drei Buchstaben. Drei Gegenstände. Wer ist am schnellsten?",
+    steps: ["Die Spielleitung startet die Runde. Drei zufällige Buchstaben erscheinen gleichzeitig bei allen.", "Schreibe zu jedem Buchstaben einen konkreten Gegenstand auf, der mit diesem Buchstaben beginnt.", "Tastaturtasten zählen nicht als Gegenstand.", "Wer alle drei Begriffe hat, stoppt die Runde mit Enter, Tab oder „Fertig – Runde stoppen“. Die Runde endet dann für alle."],
+    scoring: ["Die Spielleitung bewertet jeden Begriff: ✓ eigener korrekter Begriff (1), ½ von mehreren genannt (0,5), × falsch oder leer (0).", "Schnell eingegebene gültige Begriffe geben einen kleinen Zeitbonus.", "Rangpunkte: Platz 1 = 6, Platz 2 = 5 … bis 0. Gleichstand = gleiche Punkte."] },
+  { game: "Stadt–Land–Fluss", tagline: "Der Klassiker – mit Zusatzkategorien der Spielleitung.",
+    steps: ["Stadt, Land und Fluss sind fix. Die Spielleitung kann weitere Kategorien ergänzen (z. B. Beruf, Tier).", "Die Spielleitung dreht den Buchstaben (ohne X, Y, Z) und gibt das GO für alle.", "Fülle zu jeder Kategorie einen Begriff mit dem Buchstaben aus.", "Wer alle Felder hat, stoppt die Runde mit Enter, Tab oder „Fertig – Runde stoppen“."],
+    scoring: ["Bewertung pro Begriff wie bei der ABCD-Jagd: ✓ = 1, ½ = 0,5, × = 0. Gleiche Begriffe werden automatisch als ½ vorgeschlagen.", "Schnelle gültige Begriffe geben einen Zeitbonus.", "Rangpunkte: Platz 1 = 6, Platz 2 = 5 … bis 0."] },
+  { game: "Stiller Held", tagline: "Wer hat diese Woche im Hintergrund am meisten bewegt?",
+    steps: ["Die Spielleitung eröffnet die Abstimmung.", "Jede Person gibt geheim genau eine Stimme ab – auch für sich selbst, wenn sie will.", "Die Stimme kann bis zum Abschluss geändert werden.", "Die Spielleitung schliesst die Abstimmung."],
+    scoring: ["Die Person mit den meisten Stimmen erhält 6 Punkte, alle anderen 0.", "Bei Gleichstand entscheidet die Spielleitung zwischen den Bestplatzierten."] },
+  { game: "Live-Cooking", tagline: "Wer es zieht, kocht nächste Woche für alle.",
+    steps: ["Die ausgeloste Spielleitung bereitet für die nächste Woche ein Live-Cooking vor.", "Sie teilt mit, was eingekauft werden muss. Alle anderen kaufen ein.", "Im Termin wird gemeinsam gekocht.", "Die Spielleitung erfasst in der App, ob das Cooking stattgefunden hat und wer mitgekocht hat."],
+    scoring: ["Durchgeführt: Spielleitung 6 Punkte, alle Teilnehmenden 3 Punkte.", "Nicht durchgeführt (verhängt): alle anderen 6 Punkte, Spielleitung 0."] },
+  { game: "Dümmste Erfindung", tagline: "Das beste Plädoyer für die sinnloseste Erfindung.",
+    steps: ["Jede Person bereitet ein kurzes Plädoyer vor, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt.", "Alle erfassen ihr Stichwort in der App. So wächst die Liste der Erfindungen.", "Bereits in früheren Sessions vorgestellte Erfindungen sind gesperrt.", "Nach allen Plädoyers startet die Spielleitung die geheime Abstimmung. Die eigene Erfindung kann nicht gewählt werden."],
+    scoring: ["Wer die meisten Stimmen erhält, bekommt 6 Punkte. Bei Gleichstand erhalten alle Bestplatzierten 6 Punkte."] },
+  { game: "Draw the Picture", tagline: "Beschreiben, nachmalen, vergleichen.",
+    steps: ["Die Spielleitung malt vor dem Termin ein Bild in max. 60 Sekunden – im Browser (Timer) oder in Paint und hochladen.", "Im Termin beschreibt sie, was sie gemalt hat. Alle anderen malen gleichzeitig im Browser nach (oder laden ein Bild hoch).", "Ist die Beschreibung fertig, stoppt die Spielleitung das Malen. Alle Bilder sind damit eingereicht.", "Die Spielleitung wählt das Bild, das am besten zum Original passt. Danach stimmt die Gruppe ab: passt oder passt nicht."],
+    scoring: ["Passt (Mehrheit oder Gleichstand): Spielleitung und gewählte Person je 6 Punkte.", "Passt nicht (Mehrheit): Spielleitung 6 Punkte Abzug – schlecht beschrieben."] },
+  { game: "Podcast", tagline: "Die Spielleitung liefert einen Podcast.",
+    steps: ["Die ausgeloste Spielleitung produziert bis zum Termin einen Podcast.", "Im Termin erfasst sie in der App, ob der Podcast geliefert wurde."],
+    scoring: ["Geliefert: Spielleitung 6 Punkte.", "Nicht geliefert: alle anderen 6 Punkte, Spielleitung 0."] },
+  { game: "Dingsbums", tagline: "Welche Variante stammt von der Spielleitung?",
+    steps: ["Die Spielleitung erfasst vor dem Termin einen Satz mit dem Platzhalter „Dingsbums“, z. B. „Ich bin Fan von DINGSBUMS“, und ihre eigene Variante.", "Im Termin erscheint der Satz bei allen. Jede Person schickt geheim eine eigene Variante für Dingsbums.", "Die Spielleitung startet die Umfrage: Alle Varianten erscheinen gemischt und anonym.", "Alle raten, welche Variante von der Spielleitung stammt. Das Resultat ist erst nach dem Auflösen sichtbar."],
+    scoring: ["Wer die Spielleitung entlarvt, erhält 6 Punkte.", "Entlarvt niemand die Spielleitung, erhält sie 6 Punkte.", "Wessen Variante (ausser der Spielleitung) am meisten Stimmen erhält, bekommt zusätzlich 6 Punkte."] }
 ];
 
 function renderRulesPage() {
   const list = items => `<ul class="rules-list">${items.map(item => `<li>${esc(item)}</li>`).join("")}</ul>`;
-  app.innerHTML = `<section><p class="eyebrow">SPIELÜBERSICHT</p><h1>Spiele & Regeln</h1><p class="lead">Jede Woche ein Spiel, eine Spielleitung. Die Spielleitung spielt immer mit.</p>
-    <div class="rules-grid">${RULES.map(rule => `
-      <article class="rules-card ${rule.game === state.current.game ? "current" : ""}">
-        ${rule.game === state.current.game ? `<span class="rules-badge">Diese Woche</span>` : ""}
-        <h2>${esc(rule.game)}</h2><p class="rules-tagline">${esc(rule.tagline)}</p>
-        <h3>Ablauf</h3>${list(rule.steps)}
-        <h3>Punkte</h3>${list(rule.scoring)}
-      </article>`).join("")}</div>
-    <article class="rules-card rules-general"><h2>Wochenablauf</h2>${list([
-      "Alle öffnen den Link und wählen ihren Namen. Die Startseite zeigt Spiel und Spielleitung der Woche.",
-      "Nur die Spielleitung startet, bewertet und schliesst ab – spielt aber selbst mit.",
-      "Nach dem Spiel: Tagesrangliste und ewige Rangliste (Summe aller Wochen).",
-      "Danach werden Spiel und Spielleitung für nächste Woche separat ausgelost. Das aktuelle Spiel und die aktuelle Leitung pausieren eine Woche.",
-      "Abwesende (Ferien etc.) kann die Spielleitung vor der Auslosung abwählen."
-    ])}</article>
+  app.innerHTML = `<section><p class="eyebrow">SPIELÜBERSICHT</p><h1>Spiele & Regeln</h1><p class="lead">Jede Woche ein Spiel, eine Spielleitung. Tippe auf ein Spiel für Ablauf und Punkte.</p>
+    <div class="rules-accordion">${RULES.map(rule => `
+      <details class="rules-item ${rule.game === state.current.game ? "current" : ""}">
+        <summary><span class="rules-title">${esc(rule.game)}${rule.game === state.current.game ? `<span class="rules-badge">Diese Woche</span>` : ""}</span><span class="rules-tagline">${esc(rule.tagline)}</span></summary>
+        <div class="rules-body"><div><h3>Ablauf</h3>${list(rule.steps)}</div><div><h3>Punkte</h3>${list(rule.scoring)}</div></div>
+      </details>`).join("")}
+      <details class="rules-item">
+        <summary><span class="rules-title">Wochenablauf</span><span class="rules-tagline">Login, Spielleitung, Ranglisten und Auslosung</span></summary>
+        <div class="rules-body"><div>${list([
+          "Alle öffnen den Link und wählen ihren Namen. Die Startseite zeigt Spiel und Spielleitung der Woche.",
+          "Nur die Spielleitung startet, bewertet und schliesst ab – spielt aber selbst mit.",
+          "Für Auswertung, Resultat und Auslosung teilt die Spielleitung ihren Bildschirm.",
+          "Nach dem Spiel: Tagesrangliste und ewige Rangliste (Summe aller Wochen).",
+          "Danach werden Spiel und Spielleitung für nächste Woche separat ausgelost. Das aktuelle Spiel und die aktuelle Leitung pausieren eine Woche.",
+          "Abwesende (Ferien etc.) kann die Spielleitung vor der Auslosung abwählen."
+        ])}</div></div>
+      </details>
+    </div>
   </section>`;
 }
 
@@ -1014,6 +1016,525 @@ function formatSeconds(seconds) {
   return `${String(minutes).padStart(2,"0")}:${remainder}`;
 }
 
+// ===================== Neue Spiele =====================
+let drawings = {};
+let pointerDown = false;
+let localDrawing = { roundId: "", dataUrl: "" };
+let drawingSaveTimer = null;
+let hostTimerEnd = 0;
+let hostTimerHandle = null;
+let lastPhaseSeen = "";
+const CANVAS_W = 640;
+const CANVAS_H = 480;
+const PEN_COLORS = ["#26221d", "#e4572e", "#2e86de", "#2a9d5c", "#f3a712", "#8e44ad"];
+let penColor = PEN_COLORS[0];
+let penSize = 5;
+
+function canvasBusy() {
+  return pointerDown;
+}
+
+function hostName() { return state.current.host; }
+function others() { return PEOPLE.filter(person => person !== hostName()); }
+function roundDrawing(person) {
+  const item = drawings[person];
+  return item && item.roundId === state.current.id ? item : null;
+}
+
+function onDrawings(data) {
+  drawings = data || {};
+  if (state.current.game !== "Draw the Picture" || !currentUser || !inGame) return;
+  if (isHost() || ["review", "vote"].includes(state.current.phase)) render();
+}
+
+function finishWith(points, details) {
+  if (!isHost()) return;
+  mutate(next => {
+    next.current.results = PEOPLE.map(person => ({ person, points: points[person] || 0, raw: points[person] || 0, detail: details[person] || "–" }))
+      .sort((a, b) => b.points - a.points || a.person.localeCompare(b.person));
+    next.current.endedAt = Date.now();
+    next.current.phase = "results";
+  });
+}
+
+function setPhase(phase, extra) {
+  if (!isHost()) return;
+  mutate(next => {
+    next.current.phase = phase;
+    if (phase === "play") next.current.startedAt = Date.now();
+    if (extra) extra(next);
+  });
+}
+
+function renderCustomGame() {
+  const game = state.current.game;
+  if (game === "Live-Cooking" || game === "Podcast") return renderAssignment();
+  if (game === "Dümmste Erfindung") return renderInvention();
+  if (game === "Dingsbums") return renderDingsbums();
+  if (game === "Draw the Picture") return renderPicture();
+}
+
+function waitingBox(title, text) {
+  return `<div class="waiting-stage"><div><div class="waiting-pulse"></div><h3>${title}</h3><p>${text}</p></div></div>`;
+}
+
+function statusLine(done, total, label) {
+  return `<div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${done} von ${total} ${label}</h3></div></div>`;
+}
+
+// ---------- Live-Cooking & Podcast ----------
+function renderAssignment() {
+  const cooking = state.current.game === "Live-Cooking";
+  const host = esc(hostName());
+  const participants = Array.isArray(state.current.participants) ? state.current.participants : others();
+  const intro = cooking
+    ? `${host} hat das Live-Cooking vorbereitet: Einkaufsliste verteilt, alle haben eingekauft, jetzt wird gemeinsam gekocht.`
+    : `${host} muss diese Woche einen Podcast liefern.`;
+  const rules = cooking
+    ? "Durchgeführt: Spielleitung 6 Punkte, alle Teilnehmenden 3 Punkte. Nicht durchgeführt: alle anderen 6 Punkte, Spielleitung 0."
+    : "Geliefert: Spielleitung 6 Punkte. Nicht geliefert: alle anderen 6 Punkte, Spielleitung 0.";
+  app.innerHTML = `<section class="panel game-shell">
+    ${gameTop(`${cooking ? "LIVE-COOKING" : "PODCAST"} · ABSCHLUSS`, cooking ? "Wird heute gekocht?" : "Ist der Podcast da?")}
+    <p class="rule-note">${intro}<br>${rules}</p>
+    ${isHost() ? `
+      ${cooking ? `<div class="section-heading"><div><p class="eyebrow">TEILNEHMENDE</p><h3>Wer hat mitgekocht?</h3></div><p>Nur bei „Durchgeführt“ relevant: Teilnehmende erhalten 3 Punkte.</p></div>
+        <div class="host-pool-grid">${others().map(person => `<label><input type="checkbox" data-participant="${esc(person)}" ${participants.includes(person) ? "checked" : ""}><span class="avatar">${initials(person)}</span>${esc(person)}</label>`).join("")}</div>` : ""}
+      <div class="button-row outcome-row">
+        <button class="button primary large" type="button" data-action="outcome-done">${cooking ? "✓ Durchgeführt" : "✓ Podcast geliefert"}</button>
+        <button class="button secondary large" type="button" data-action="outcome-failed">${cooking ? "✗ Nicht durchgeführt" : "✗ Nicht geliefert"}</button>
+      </div>` : waitingBox(`${host} schliesst ab`, "Sobald die Spielleitung das Resultat erfasst, erscheinen die Punkte.")}
+  </section>`;
+}
+
+function finishAssignment(done) {
+  const cooking = state.current.game === "Live-Cooking";
+  const host = hostName();
+  const points = {}, details = {};
+  if (done) {
+    points[host] = 6; details[host] = cooking ? "hat gekocht" : "Podcast geliefert";
+    if (cooking) {
+      const participants = Array.isArray(state.current.participants) ? state.current.participants : others();
+      participants.forEach(person => { points[person] = 3; details[person] = "hat mitgekocht"; });
+    }
+  } else {
+    others().forEach(person => { points[person] = 6; details[person] = cooking ? "Cooking verhängt" : "Podcast nicht geliefert"; });
+    points[host] = 0; details[host] = cooking ? "nicht gekocht" : "nicht geliefert";
+  }
+  finishWith(points, details);
+}
+
+// ---------- Dümmste Erfindung ----------
+function inventionTaken(name, except) {
+  const term = normalizedTerm(name);
+  if (!term) return false;
+  if ((state.inventions || []).some(item => normalizedTerm(item.name) === term)) return "bereits in einer früheren Session vorgestellt";
+  if (Object.entries(state.current.entries).some(([person, value]) => person !== except && normalizedTerm(value) === term)) return "diese Woche schon gewählt";
+  return false;
+}
+
+function renderInventionArchive() {
+  const list = state.inventions || [];
+  return `<details class="archive"><summary>Bereits vorgestellte Erfindungen (${list.length})</summary>${list.length ? `<ul>${list.map(item => `<li><strong>${esc(item.name)}</strong> – ${esc(item.person)}, ${esc(item.date || "")}</li>`).join("")}</ul>` : "<p>Noch keine.</p>"}</details>`;
+}
+
+function renderInvention() {
+  const phase = state.current.phase;
+  const entries = state.current.entries;
+  const mine = entries[currentUser] || "";
+  if (phase === "lobby") {
+    app.innerHTML = `<section class="panel game-shell">
+      ${gameTop("DÜMMSTE ERFINDUNG · VORBEREITUNG", "Welche Erfindung ist die dümmste?")}
+      <p class="rule-note">Jede Person hält ein kurzes Plädoyer, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt. Bereits vorgestellte Erfindungen sind tabu. Erfasse hier dein Stichwort.</p>
+      <form class="entry-form" data-form="invention"><input data-keep-focus name="entry" maxlength="60" placeholder="Deine Erfindung, z. B. Selfie-Stick" value="${esc(mine)}"><button class="button primary" type="submit">${mine ? "Ändern" : "Erfassen"}</button></form>
+      ${mine ? `<p class="entry-ok">✓ Erfasst: <strong>${esc(mine)}</strong></p>` : ""}
+      ${statusLine(Object.keys(entries).length, PEOPLE.length, "Stichworten erfasst")}
+      <div class="entry-list">${PEOPLE.map(person => `<div class="entry-row ${entries[person] ? "done" : ""}"><span class="avatar">${initials(person)}</span><strong>${esc(person)}</strong><span>${entries[person] ? esc(entries[person]) : "–"}</span></div>`).join("")}</div>
+      ${renderInventionArchive()}
+      ${isHost() ? `<div class="review-footer"><span>Nach allen Plädoyers:</span><button class="button primary large" type="button" data-action="invention-vote" ${Object.keys(entries).length >= 2 ? "" : "disabled"}>Abstimmung starten</button></div>` : ""}
+    </section>`;
+    return;
+  }
+  const authors = PEOPLE.filter(person => entries[person]);
+  const myVote = state.current.votes[currentUser] || "";
+  const voteCount = Object.keys(state.current.votes).length;
+  app.innerHTML = `<section class="panel game-shell">
+    ${gameTop("DÜMMSTE ERFINDUNG · ABSTIMMUNG", "Welches Plädoyer hat überzeugt?")}
+    <p class="rule-note">Gib geheim eine Stimme ab. Die eigene Erfindung kann nicht gewählt werden. Wer am meisten Stimmen erhält, bekommt 6 Punkte.</p>
+    <div class="vote-grid">${authors.map(person => `<button class="vote-card ${myVote === person ? "selected" : ""}" type="button" data-action="vote-invention" data-person="${esc(person)}" ${person === currentUser ? "disabled" : ""}><span class="avatar">${initials(person)}</span><span><strong>${esc(entries[person])}</strong><br><small>${esc(person)}${person === currentUser ? " · ich" : ""}</small></span>${myVote === person ? `<span class="check">✓</span>` : ""}</button>`).join("")}</div>
+    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${PEOPLE.length} Stimmen abgegeben</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="invention-close" ${voteCount ? "" : "disabled"}>Abstimmung schliessen</button>` : "<p>Resultat bleibt bis zum Abschluss geheim.</p>"}</div>
+  </section>`;
+}
+
+function closeInvention() {
+  if (!isHost()) return;
+  const entries = state.current.entries;
+  const totals = {};
+  Object.values(state.current.votes).forEach(person => { totals[person] = (totals[person] || 0) + 1; });
+  const max = Math.max(0, ...Object.values(totals));
+  const points = {}, details = {};
+  PEOPLE.forEach(person => {
+    const votes = totals[person] || 0;
+    points[person] = max > 0 && votes === max ? 6 : 0;
+    details[person] = entries[person] ? `${entries[person]} · ${votes} ${votes === 1 ? "Stimme" : "Stimmen"}` : "kein Plädoyer";
+  });
+  const date = today();
+  mutate(next => {
+    const list = Array.isArray(next.inventions) ? next.inventions : [];
+    Object.entries(next.current.entries).forEach(([person, name]) => {
+      if (!list.some(item => normalizedTerm(item.name) === normalizedTerm(name))) list.push({ name, person, date });
+    });
+    next.inventions = list;
+    next.current.results = PEOPLE.map(person => ({ person, points: points[person], raw: points[person], detail: details[person] }))
+      .sort((a, b) => b.points - a.points || a.person.localeCompare(b.person));
+    next.current.endedAt = Date.now();
+    next.current.phase = "results";
+  });
+}
+
+// ---------- Dingsbums ----------
+function dingsbumsSentence(variant) {
+  const sentence = esc(state.current.secret.sentence || "");
+  return sentence.replace(/dingsbums/i, `<mark>${variant ? esc(variant) : "DINGSBUMS"}</mark>`);
+}
+
+function renderDingsbums() {
+  const phase = state.current.phase;
+  const host = hostName();
+  const entries = state.current.entries;
+  if (phase === "lobby") {
+    const secret = state.current.secret;
+    const valid = /dingsbums/i.test(secret.sentence || "") && (secret.variant || "").trim();
+    app.innerHTML = `<section class="panel game-shell">
+      ${gameTop("DINGSBUMS · VORBEREITUNG", "Ein Satz mit Lücke")}
+      <p class="rule-note">Die Spielleitung nennt einen Satz mit „Dingsbums“ als Platzhalter, z. B. „Ich bin Fan von DINGSBUMS“. Alle erfinden geheim eine Variante. Danach wird geraten, welche Variante von der Spielleitung stammt.</p>
+      ${isHost() ? `<form class="secret-form" data-form="dingsbums-secret">
+          <label>Dein Satz (muss „Dingsbums“ enthalten)<input data-keep-focus name="sentence" maxlength="140" value="${esc(secret.sentence || "")}" placeholder="Ich bin Fan von Dingsbums"></label>
+          <label>Deine eigene Variante für Dingsbums (geheim)<input data-keep-focus name="variant" maxlength="60" value="${esc(secret.variant || "")}" placeholder="z. B. Gummibärchen"></label>
+          <button class="button secondary" type="submit">Speichern</button>
+        </form>
+        <div class="review-footer"><span>${valid ? "✓ Bereit" : "Satz mit „Dingsbums“ und eigene Variante speichern"}</span><button class="button primary large" type="button" data-action="dings-start" ${valid ? "" : "disabled"}>Satz zeigen & starten</button></div>`
+        : waitingBox(`${esc(host)} bereitet den Satz vor`, "Sobald es losgeht, erscheint der Satz hier.")}
+    </section>`;
+    return;
+  }
+  if (phase === "play") {
+    const mine = entries[currentUser] || "";
+    const count = others().filter(person => entries[person]).length;
+    app.innerHTML = `<section class="panel game-shell">
+      ${gameTop("DINGSBUMS · VARIANTEN", "Was ist Dingsbums?")}
+      <p class="dings-sentence">${dingsbumsSentence()}</p>
+      ${isHost() ? `
+        <div class="entry-list">${others().map(person => `<div class="entry-row ${entries[person] ? "done" : ""}"><span class="avatar">${initials(person)}</span><strong>${esc(person)}</strong><span>${entries[person] ? esc(entries[person]) : "–"}</span></div>`).join("")}</div>
+        <div class="review-footer"><span>${count} von ${others().length} Varianten da</span><button class="button primary large" type="button" data-action="dings-vote" ${count ? "" : "disabled"}>Umfrage starten</button></div>`
+      : `<p class="rule-note">Erfinde eine glaubwürdige Variante. Nur die Spielleitung sieht sie.</p>
+        <form class="entry-form" data-form="dingsbums-entry"><input data-keep-focus name="entry" maxlength="60" placeholder="Deine Variante" value="${esc(mine)}"><button class="button primary" type="submit">${mine ? "Ändern" : "Abschicken"}</button></form>
+        ${mine ? `<p class="entry-ok">✓ Abgeschickt: <strong>${esc(mine)}</strong></p>` : ""}
+        ${statusLine(count, others().length, "Varianten abgegeben")}`}
+    </section>`;
+    return;
+  }
+  // vote
+  const order = Array.isArray(state.current.order) ? state.current.order : [];
+  const myVote = state.current.votes[currentUser] || "";
+  const voters = others();
+  const voteCount = voters.filter(person => state.current.votes[person]).length;
+  const variantOf = person => person === host ? state.current.secret.variant : entries[person];
+  app.innerHTML = `<section class="panel game-shell">
+    ${gameTop("DINGSBUMS · UMFRAGE", "Welche Variante stammt von der Spielleitung?")}
+    <p class="dings-sentence">${dingsbumsSentence()}</p>
+    ${isHost() ? "" : `<p class="rule-note">Tippe auf die Variante, die du ${esc(host)} zutraust. Deine eigene kannst du nicht wählen.</p>`}
+    <div class="vote-grid">${order.map((person, index) => `<button class="vote-card ${myVote === person ? "selected" : ""}" type="button" data-action="vote-dings" data-person="${esc(person)}" ${isHost() || person === currentUser ? "disabled" : ""}><span class="avatar">${String.fromCharCode(65 + index)}</span><span>${esc(variantOf(person))}${person === currentUser ? " · meine" : ""}</span>${myVote === person ? `<span class="check">✓</span>` : ""}</button>`).join("")}</div>
+    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${voters.length} Stimmen abgegeben</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="dings-close" ${voteCount ? "" : "disabled"}>Auflösen</button>` : "<p>Resultat erst nach Abschluss sichtbar.</p>"}</div>
+  </section>`;
+}
+
+function closeDingsbums() {
+  const host = hostName();
+  const votes = state.current.votes;
+  const points = {}, details = {};
+  PEOPLE.forEach(person => { points[person] = 0; details[person] = []; });
+  const hunters = others().filter(person => votes[person] === host);
+  hunters.forEach(person => { points[person] += 6; details[person].push("Spielleitung entlarvt"); });
+  if (!hunters.length) { points[host] += 6; details[host].push("niemand hat dich entlarvt"); }
+  const received = {};
+  Object.values(votes).forEach(person => { if (person !== host) received[person] = (received[person] || 0) + 1; });
+  const max = Math.max(0, ...Object.values(received));
+  if (max > 0) Object.entries(received).forEach(([person, count]) => {
+    if (count === max) { points[person] += 6; details[person].push(`beste Variante (${count} ${count === 1 ? "Stimme" : "Stimmen"})`); }
+  });
+  const flat = {};
+  PEOPLE.forEach(person => { flat[person] = details[person].join(" · ") || (state.current.entries[person] ? esc(state.current.entries[person]) : "–"); });
+  flat[host] = `${flat[host]} · Variante: ${state.current.secret.variant}`;
+  finishWith(points, flat);
+}
+
+// ---------- Draw the Picture ----------
+function canvasHtml(note) {
+  return `<div class="canvas-wrap">
+    <div class="canvas-tools">${PEN_COLORS.map(color => `<button type="button" class="pen ${color === penColor ? "active" : ""}" style="background:${color}" data-action="pen-color" data-color="${color}" aria-label="Farbe"></button>`).join("")}
+      <select data-pen-size aria-label="Strichstärke">${[3, 5, 9, 16].map(size => `<option value="${size}" ${size === penSize ? "selected" : ""}>${size}px</option>`).join("")}</select>
+      <button type="button" class="button ghost small" data-action="canvas-clear">Leeren</button>
+      <label class="button ghost small upload">Bild hochladen<input type="file" accept="image/*" data-upload hidden></label>
+    </div>
+    <canvas id="draw-canvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
+    <p class="canvas-note">${note}</p>
+  </div>`;
+}
+
+function canvasEnabled() {
+  if (state.current.game !== "Draw the Picture") return false;
+  if (state.current.phase === "play") return !isHost();
+  if (state.current.phase === "lobby") return isHost() && Date.now() < hostTimerEnd;
+  return false;
+}
+
+function renderPicture() {
+  const phase = state.current.phase;
+  const host = hostName();
+  const reference = roundDrawing(host);
+  if (phase === "lobby") {
+    const running = Date.now() < hostTimerEnd;
+    app.innerHTML = `<section class="panel game-shell">
+      ${gameTop("DRAW THE PICTURE · VORBEREITUNG", "Das Original")}
+      <p class="rule-note">Die Spielleitung malt vor dem Termin ein Bild in maximal 60 Sekunden – hier im Browser oder in Paint und dann hochladen. Im Termin beschreibt sie das Bild, alle anderen malen nach.</p>
+      ${isHost() ? `
+        <div class="timer-row"><button class="button secondary" type="button" data-action="host-timer">${running ? "Läuft …" : reference ? "Neu malen (60 s)" : "60-Sekunden-Timer starten"}</button><strong class="clock-value" data-host-timer>${running ? Math.ceil((hostTimerEnd - Date.now()) / 1000) : 60} s</strong></div>
+        ${canvasHtml(running ? "Malen! Nach 60 Sekunden wird das Bild gesperrt und gespeichert." : "Timer starten zum Malen oder ein Bild hochladen.")}
+        <div class="review-footer"><span>${reference ? "✓ Original gespeichert" : "Noch kein Original gespeichert"}</span><button class="button primary large" type="button" data-action="picture-start" ${reference ? "" : "disabled"}>Beschreibung starten</button></div>`
+        : waitingBox(`${esc(host)} hat ein Bild gemalt`, "Gleich beschreibt die Spielleitung das Bild. Dann malst du hier im Browser nach.")}
+    </section>`;
+    return;
+  }
+  if (phase === "play") {
+    const submitted = others().filter(person => roundDrawing(person)).length;
+    app.innerHTML = `<section class="panel game-shell">
+      ${gameTop("DRAW THE PICTURE · MALEN", isHost() ? "Beschreibe dein Bild" : `Hör ${esc(host)} zu und male`)}
+      ${isHost() ? `<div class="picture-ref"><img src="${reference?.image || ""}" alt="Original"></div>
+        <div class="review-footer"><span>${submitted} von ${others().length} malen mit (wird laufend gespeichert)</span><button class="button primary large" type="button" data-action="picture-stop">Beschreibung fertig – Malen stoppen</button></div>`
+      : canvasHtml("Wird automatisch gespeichert. Sobald die Spielleitung stoppt, ist das Bild eingereicht.")}
+    </section>`;
+    return;
+  }
+  const gallery = others().filter(person => roundDrawing(person)).sort((a, b) => (roundDrawing(a).updatedAt || 0) - (roundDrawing(b).updatedAt || 0));
+  if (phase === "review") {
+    app.innerHTML = `<section class="panel game-shell">
+      ${gameTop("DRAW THE PICTURE · VERGLEICH", "Welches Bild passt am besten?")}
+      <div class="picture-ref"><span class="tag">Original von ${esc(host)}</span><img src="${reference?.image || ""}" alt="Original"></div>
+      <div class="gallery">${gallery.map(person => `<figure class="gallery-item"><img src="${roundDrawing(person).image}" alt="Bild von ${esc(person)}"><figcaption>${esc(person)}${isHost() ? `<button class="button secondary small" type="button" data-action="picture-pick" data-person="${esc(person)}">Passt am besten</button>` : ""}</figcaption></figure>`).join("") || "<p>Keine Bilder eingereicht.</p>"}</div>
+      ${isHost() ? "" : `<p class="rule-note">${esc(host)} wählt das Bild, das am besten passt.</p>`}
+    </section>`;
+    return;
+  }
+  // vote: Gruppe beurteilt die Wahl
+  const pick = state.current.pick;
+  const verdict = state.current.verdict;
+  const mine = verdict[currentUser];
+  const yes = Object.values(verdict).filter(value => value === "yes").length;
+  const no = Object.values(verdict).filter(value => value === "no").length;
+  app.innerHTML = `<section class="panel game-shell">
+    ${gameTop("DRAW THE PICTURE · URTEIL", "Passt das wirklich?")}
+    <div class="compare"><figure><img src="${reference?.image || ""}" alt="Original"><figcaption>Original · ${esc(host)}</figcaption></figure><figure><img src="${roundDrawing(pick)?.image || ""}" alt="Bild von ${esc(pick)}"><figcaption>Gewählt · ${esc(pick)}</figcaption></figure></div>
+    <p class="rule-note">Gute Übereinstimmung: ${esc(host)} und ${esc(pick)} erhalten je 6 Punkte. Mehrheit sagt „passt nicht“: ${esc(host)} erhält 6 Punkte Abzug.</p>
+    ${isHost() ? "" : `<div class="button-row outcome-row"><button class="button ${mine === "yes" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="yes">👍 Passt</button><button class="button ${mine === "no" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="no">👎 Passt nicht</button></div>`}
+    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${yes + no} von ${others().length} Stimmen</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="verdict-close">Abschliessen</button>` : ""}</div>
+  </section>`;
+}
+
+function closePicture() {
+  const host = hostName();
+  const pick = state.current.pick;
+  const values = Object.values(state.current.verdict);
+  const yes = values.filter(value => value === "yes").length;
+  const no = values.filter(value => value === "no").length;
+  const points = {}, details = {};
+  if (yes >= no) {
+    points[host] = 6; points[pick] = 6;
+    details[host] = `Beschreibung passt (${yes}:${no})`; details[pick] = "bestes Bild";
+  } else {
+    points[host] = -6; details[host] = `schlecht beschrieben (${yes}:${no})`;
+  }
+  finishWith(points, details);
+}
+
+let canvasCtx = null;
+function mountCanvas() {
+  const canvas = document.querySelector("#draw-canvas");
+  canvasCtx = null;
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  canvasCtx = ctx;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const source = localDrawing.roundId === state.current.id && localDrawing.dataUrl ? localDrawing.dataUrl : roundDrawing(currentUser)?.image;
+  if (source) {
+    const image = new Image();
+    image.onload = () => ctx.drawImage(image, 0, 0, CANVAS_W, CANVAS_H);
+    image.src = source;
+  }
+  canvas.classList.toggle("locked", !canvasEnabled());
+  let last = null;
+  const point = event => {
+    const rect = canvas.getBoundingClientRect();
+    return [(event.clientX - rect.left) * CANVAS_W / rect.width, (event.clientY - rect.top) * CANVAS_H / rect.height];
+  };
+  canvas.addEventListener("pointerdown", event => {
+    if (!canvasEnabled()) return;
+    pointerDown = true;
+    canvas.setPointerCapture(event.pointerId);
+    last = point(event);
+    ctx.fillStyle = penColor;
+    ctx.beginPath(); ctx.arc(last[0], last[1], penSize / 2, 0, Math.PI * 2); ctx.fill();
+  });
+  canvas.addEventListener("pointermove", event => {
+    if (!pointerDown || !canvasEnabled()) return;
+    const next = point(event);
+    ctx.strokeStyle = penColor; ctx.lineWidth = penSize; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(next[0], next[1]); ctx.stroke();
+    last = next;
+  });
+  const end = () => {
+    if (!pointerDown) return;
+    pointerDown = false;
+    storeLocalCanvas();
+    queueDrawingSave();
+  };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+}
+
+function storeLocalCanvas() {
+  const canvas = document.querySelector("#draw-canvas");
+  if (!canvas) return;
+  localDrawing = { roundId: state.current.id, dataUrl: canvas.toDataURL("image/jpeg", 0.7) };
+}
+
+function queueDrawingSave(immediate = false) {
+  clearTimeout(drawingSaveTimer);
+  const run = () => {
+    if (!store || localDrawing.roundId !== state.current.id || !localDrawing.dataUrl) return;
+    store.saveDrawing(currentUser, { roundId: state.current.id, image: localDrawing.dataUrl, updatedAt: Date.now(), role: isHost() ? "host" : "player" }).catch(reportError);
+  };
+  if (immediate) run(); else drawingSaveTimer = setTimeout(run, 500);
+}
+
+function startHostTimer() {
+  if (!isHost()) return;
+  localDrawing = { roundId: state.current.id, dataUrl: "" };
+  hostTimerEnd = Date.now() + 60000;
+  clearInterval(hostTimerHandle);
+  hostTimerHandle = setInterval(() => {
+    const label = document.querySelector("[data-host-timer]");
+    const left = Math.max(0, Math.ceil((hostTimerEnd - Date.now()) / 1000));
+    if (label) label.textContent = `${left} s`;
+    if (left <= 0) {
+      clearInterval(hostTimerHandle);
+      pointerDown = false;
+      storeLocalCanvas();
+      queueDrawingSave(true);
+      showToast("Zeit abgelaufen – Original gespeichert");
+      render();
+    }
+  }, 250);
+  render();
+}
+
+function uploadImage(file) {
+  if (!file || !canvasCtx) return;
+  if (state.current.phase === "lobby" && !isHost()) return;
+  if (state.current.phase !== "lobby" && !canvasEnabled()) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const image = new Image();
+    image.onload = () => {
+      const ctx = canvasCtx;
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      const scale = Math.min(CANVAS_W / image.width, CANVAS_H / image.height);
+      const w = image.width * scale, h = image.height * scale;
+      ctx.drawImage(image, (CANVAS_W - w) / 2, (CANVAS_H - h) / 2, w, h);
+      storeLocalCanvas();
+      queueDrawingSave(true);
+      showToast("Bild gespeichert");
+      setTimeout(render, 300);
+    };
+    image.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---------- Aktionen ----------
+function handleCustomAction(action, event) {
+  const person = event.target.closest("[data-person]")?.dataset.person;
+  if (action === "outcome-done") finishAssignment(true);
+  if (action === "outcome-failed") finishAssignment(false);
+  if (action === "invention-vote") setPhase("vote", next => { next.current.votes = {}; });
+  if (action === "vote-invention" && person && person !== currentUser && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
+  if (action === "invention-close") closeInvention();
+  if (action === "dings-start") setPhase("play", next => { next.current.entries = {}; });
+  if (action === "dings-vote") setPhase("vote", next => {
+    next.current.votes = {};
+    next.current.order = shuffle([next.current.host, ...PEOPLE.filter(name => name !== next.current.host && next.current.entries[name])]);
+  });
+  if (action === "vote-dings" && person && person !== currentUser && !isHost() && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
+  if (action === "dings-close" && isHost()) closeDingsbums();
+  if (action === "host-timer") startHostTimer();
+  if (action === "picture-start") setPhase("play");
+  if (action === "picture-stop") setPhase("review", next => { next.current.endedAt = Date.now(); });
+  if (action === "picture-pick" && person) setPhase("vote", next => { next.current.pick = person; next.current.verdict = {}; });
+  if (action === "verdict" && !isHost() && state.current.phase === "vote") syncPatch({ current: { verdict: { [currentUser]: event.target.closest("[data-value]").dataset.value } } });
+  if (action === "verdict-close" && isHost()) closePicture();
+  if (action === "pen-color") { penColor = event.target.closest("[data-color]").dataset.color; document.querySelectorAll(".pen").forEach(pen => pen.classList.toggle("active", pen.dataset.color === penColor)); }
+  if (action === "canvas-clear" && canvasCtx && (canvasEnabled() || (isHost() && state.current.phase === "lobby"))) {
+    canvasCtx.fillStyle = "#fff"; canvasCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    if (canvasEnabled()) { storeLocalCanvas(); queueDrawingSave(); }
+  }
+}
+
+app.addEventListener("submit", event => {
+  const form = event.target.closest("[data-form]");
+  if (!form) return;
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(form));
+  if (form.dataset.form === "invention") {
+    const value = (data.entry || "").trim();
+    if (!value) return;
+    const taken = inventionTaken(value, currentUser);
+    if (taken) return showToast(`„${value}“ ist ${taken}`);
+    syncPatch({ current: { entries: { [currentUser]: value } } });
+  }
+  if (form.dataset.form === "dingsbums-entry" && state.current.phase === "play") {
+    const value = (data.entry || "").trim();
+    if (value) syncPatch({ current: { entries: { [currentUser]: value } } });
+  }
+  if (form.dataset.form === "dingsbums-secret" && isHost()) {
+    const sentence = (data.sentence || "").trim();
+    if (!/dingsbums/i.test(sentence)) return showToast("Der Satz muss „Dingsbums“ enthalten");
+    syncPatch({ current: { secret: { sentence, variant: (data.variant || "").trim() } } });
+  }
+  document.activeElement?.blur();
+});
+
+app.addEventListener("change", event => {
+  if (event.target.matches("[data-participant]") && isHost()) {
+    const person = event.target.dataset.participant;
+    const checked = event.target.checked;
+    mutate(next => {
+      const list = Array.isArray(next.current.participants) ? next.current.participants : PEOPLE.filter(name => name !== next.current.host);
+      next.current.participants = checked ? [...new Set([...list, person])] : list.filter(name => name !== person);
+    });
+  }
+  if (event.target.matches("[data-pen-size]")) penSize = Number(event.target.value);
+  if (event.target.matches("[data-upload]")) uploadImage(event.target.files?.[0]);
+});
+
+// Beim Phasenwechsel letzte Zeichnung sofort sichern
+function trackPhase() {
+  const phase = `${state.current.id}|${state.current.phase}`;
+  if (lastPhaseSeen && lastPhaseSeen !== phase && lastPhaseSeen.endsWith("|play") && state.current.game === "Draw the Picture" && !isHost()) {
+    storeLocalCanvas();
+    queueDrawingSave(true);
+  }
+  lastPhaseSeen = phase;
+}
 
 render();
 connect();
