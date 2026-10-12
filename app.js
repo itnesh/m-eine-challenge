@@ -260,6 +260,7 @@ function activePeople() {
 function login(name) {
   currentUser = name;
   safeSet(userStorage, SESSION_KEY, name);
+  safeSet(userStorage, "m-eine-challenge-last-activity", String(Date.now()));
   markPresent(name);
   loginScreen.classList.add("hidden");
   render();
@@ -1621,6 +1622,29 @@ function trackPhase() {
   if (state.current.game === "Draw the Picture" && state.current.phase === "review" && lastPhaseSeen.endsWith("|play")) submitDrawing();
   lastPhaseSeen = phase;
 }
+
+// ---------- Automatisches Logout nach 30 Min Inaktivität ----------
+const IDLE_KEY = "m-eine-challenge-last-activity";
+const IDLE_LIMIT = 30 * 60 * 1000;
+let lastActivityWrite = 0;
+function touchActivity() {
+  const now = Date.now();
+  if (now - lastActivityWrite < 10000) return;
+  lastActivityWrite = now;
+  safeSet(userStorage, IDLE_KEY, String(now));
+}
+function checkIdle() {
+  if (!currentUser) return;
+  const last = Number(safeGet(userStorage, IDLE_KEY) || 0);
+  if (last && Date.now() - last > IDLE_LIMIT) {
+    logout();
+    showToast("Nach 30 Minuten Inaktivität abgemeldet");
+  }
+}
+["pointerdown", "keydown", "input", "touchstart"].forEach(type => document.addEventListener(type, touchActivity, { passive: true }));
+checkIdle();
+if (currentUser && !safeGet(userStorage, IDLE_KEY)) touchActivity();
+setInterval(checkIdle, 30000);
 
 render();
 connect();
