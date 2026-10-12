@@ -342,3 +342,6 @@ td strong { white-space: nowrap; }
 @media (max-width: 650px) { .compare { grid-template-columns: 1fr; } .entry-row { grid-template-columns: auto 1fr; } .entry-row span:last-child { grid-column: 1 / -1; } .entry-form { flex-direction: column; } }
 .nav-link { white-space: nowrap; }
 @media (max-width: 420px) { .nav-link { padding: 8px 10px; font-size: 13px; } }
+.tool-group { display: flex; gap: 6px; align-items: center; }
+.tool { min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: white; font-weight: 700; font-size: 13px; cursor: pointer; }
+.tool.active { border-color: var(--orange); background: var(--orange-soft); color: var(--orange-dark); }

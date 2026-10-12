@@ -96,13 +96,18 @@ function mockStore(team, freshState) {
       return () => { listener = null; };
     },
     async transact(mutator) {
-      const data = read() || freshState();
-      if (mutator(data) === false) return;
-      checkRules(data);
-      write(clean(data));
-      listener?.(read());
+      await navigator.locks.request(key, async () => {
+        const data = read() || freshState();
+        if (mutator(data) === false) return;
+        checkRules(data);
+        write(clean(data));
+        listener?.(read());
+      });
     },
     async patch(patch) {
+      await navigator.locks.request(key, async () => this.patchUnlocked(patch));
+    },
+    async patchUnlocked(patch) {
       const data = read() || freshState();
       for (const [path, value] of flattenPatch(clean(patch))) {
         let target = data;

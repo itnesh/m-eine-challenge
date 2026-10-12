@@ -75,6 +75,7 @@ function freshState() {
       pick: null,
       participants: null,
       secret: { sentence: "", variant: "" },
+      drawings: {},
       draw: { game: null, host: null }
     }
   };
@@ -86,7 +87,7 @@ function normalizeState(data) {
   next.members = next.members || {};
   next.history = Array.isArray(next.history) ? next.history : [];
   next.current = { ...base.current, ...(next.current || {}) };
-  ["drafts", "reviews", "votes", "entries", "verdict"].forEach(key => { next.current[key] = next.current[key] || {}; });
+  ["drafts", "reviews", "votes", "entries", "verdict", "drawings"].forEach(key => { next.current[key] = next.current[key] || {}; });
   next.current.draw = next.current.draw || { game: null, host: null };
   next.current.secret = next.current.secret || { sentence: "", variant: "" };
   return next;
@@ -143,12 +144,13 @@ function renderKey() {
 }
 
 function onRemoteState(data) {
-  if (state.current.game === "Draw the Picture" && document.querySelector("#draw-canvas") && state.current.phase === "play") storeLocalCanvas();
+  if (document.querySelector("#draw-canvas") && state.current.phase === "play") storeLocalCanvas();
   state = normalizeState(data);
   connected = true;
   trackPhase();
   const typing = document.activeElement?.matches("[data-term-cat],[data-abcd-term],#new-category,[data-keep-focus]");
-  if ((typing || canvasBusy()) && renderKey() === lastRenderedKey) return;
+  const drawingNow = state.current.game === "Draw the Picture" && state.current.phase === "play" && document.querySelector("#draw-canvas");
+  if ((typing || canvasBusy() || drawingNow) && renderKey() === lastRenderedKey) return;
   render();
 }
 
@@ -159,8 +161,7 @@ async function connect() {
   try {
     store = await createStore(teamCode, freshState);
     const offState = store.subscribe(onRemoteState, reportError);
-    const offDrawings = store.subscribeDrawings(onDrawings, error => console.warn("Zeichnungen nicht verfügbar", error));
-    unsubscribe = () => { offState?.(); offDrawings?.(); };
+    unsubscribe = () => { offState?.(); };
     if (currentUser) markPresent(currentUser);
   } catch (error) {
     reportError(error);
@@ -965,7 +966,7 @@ const RULES = [
     steps: ["Jede Person bereitet ein kurzes Plädoyer vor, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt.", "Alle erfassen ihr Stichwort in der App. So wächst die Liste der Erfindungen.", "Bereits in früheren Sessions vorgestellte Erfindungen sind gesperrt.", "Nach allen Plädoyers startet die Spielleitung die geheime Abstimmung. Die eigene Erfindung kann nicht gewählt werden."],
     scoring: ["Wer die meisten Stimmen erhält, bekommt 6 Punkte. Bei Gleichstand erhalten alle Bestplatzierten 6 Punkte."] },
   { game: "Draw the Picture", tagline: "Beschreiben, nachmalen, vergleichen.",
-    steps: ["Die Spielleitung malt vor dem Termin ein Bild in max. 60 Sekunden – im Browser (Timer) oder in Paint und hochladen.", "Im Termin beschreibt sie, was sie gemalt hat. Alle anderen malen gleichzeitig im Browser nach (oder laden ein Bild hoch).", "Ist die Beschreibung fertig, stoppt die Spielleitung das Malen. Alle Bilder sind damit eingereicht.", "Die Spielleitung wählt das Bild, das am besten zum Original passt. Danach stimmt die Gruppe ab: passt oder passt nicht."],
+    steps: ["Die Spielleitung startet das Malen. Alle malen gleichzeitig im Browser – mit Stift, Füllen und Radierer.", "Die Spielleitung malt das Original und beschreibt dabei laut, was sie malt. Die anderen malen nur nach der Beschreibung nach.", "Ist die Spielleitung fertig, stoppt sie das Malen. Alle Bilder werden automatisch eingereicht.", "Die Spielleitung sieht alle Bilder neben ihrem Original und wählt das passendste. Danach stimmt die Gruppe ab: passt oder passt nicht."],
     scoring: ["Passt (Mehrheit oder Gleichstand): Spielleitung und gewählte Person je 6 Punkte.", "Passt nicht (Mehrheit): Spielleitung 6 Punkte Abzug – schlecht beschrieben."] },
   { game: "Podcast", tagline: "Die Spielleitung liefert einen Podcast.",
     steps: ["Die ausgeloste Spielleitung produziert bis zum Termin einen Podcast.", "Im Termin erfasst sie in der App, ob der Podcast geliefert wurde."],
@@ -1024,18 +1025,15 @@ function formatSeconds(seconds) {
 }
 
 // ===================== Neue Spiele =====================
-let drawings = {};
 let pointerDown = false;
 let localDrawing = { roundId: "", dataUrl: "" };
-let drawingSaveTimer = null;
-let hostTimerEnd = 0;
-let hostTimerHandle = null;
 let lastPhaseSeen = "";
 const CANVAS_W = 640;
 const CANVAS_H = 480;
 const PEN_COLORS = ["#26221d", "#e4572e", "#2e86de", "#2a9d5c", "#f3a712", "#8e44ad"];
 let penColor = PEN_COLORS[0];
-let penSize = 5;
+let penSize = 6;
+let penTool = "pen";
 
 function canvasBusy() {
   return pointerDown;
@@ -1043,17 +1041,6 @@ function canvasBusy() {
 
 function hostName() { return state.current.host; }
 function others() { return PEOPLE.filter(person => person !== hostName()); }
-function roundDrawing(person) {
-  const item = drawings[person];
-  return item && item.roundId === state.current.id ? item : null;
-}
-
-function onDrawings(data) {
-  drawings = data || {};
-  if (state.current.game !== "Draw the Picture" || !currentUser || !inGame) return;
-  if (isHost() || ["review", "vote"].includes(state.current.phase)) render();
-}
-
 function finishWith(points, details) {
   if (!isHost()) return;
   mutate(next => {
@@ -1278,10 +1265,14 @@ function closeDingsbums() {
 }
 
 // ---------- Draw the Picture ----------
+// Alle (inkl. Spielleitung) malen gleichzeitig. Bilder werden beim Stoppen in current.drawings gespeichert.
 function canvasHtml(note) {
   return `<div class="canvas-wrap">
-    <div class="canvas-tools">${PEN_COLORS.map(color => `<button type="button" class="pen ${color === penColor ? "active" : ""}" style="background:${color}" data-action="pen-color" data-color="${color}" aria-label="Farbe"></button>`).join("")}
-      <select data-pen-size aria-label="Strichstärke">${[3, 5, 9, 16].map(size => `<option value="${size}" ${size === penSize ? "selected" : ""}>${size}px</option>`).join("")}</select>
+    <div class="canvas-tools">
+      <div class="tool-group">${[["pen", "✏️ Stift"], ["fill", "🪣 Füllen"], ["eraser", "🧽 Radierer"]].map(([tool, label]) => `<button type="button" class="tool ${penTool === tool ? "active" : ""}" data-action="pen-tool" data-tool="${tool}">${label}</button>`).join("")}</div>
+      <div class="tool-group">${PEN_COLORS.map(color => `<button type="button" class="pen ${color === penColor ? "active" : ""}" style="background:${color}" data-action="pen-color" data-color="${color}" aria-label="Farbe"></button>`).join("")}</div>
+      <select data-pen-size aria-label="Strichstärke">${[3, 6, 12, 24].map(size => `<option value="${size}" ${size === penSize ? "selected" : ""}>${size}px</option>`).join("")}</select>
+      <button type="button" class="button ghost small" data-action="canvas-undo">↶ Zurück</button>
       <button type="button" class="button ghost small" data-action="canvas-clear">Leeren</button>
       <label class="button ghost small upload">Bild hochladen<input type="file" accept="image/*" data-upload hidden></label>
     </div>
@@ -1291,45 +1282,41 @@ function canvasHtml(note) {
 }
 
 function canvasEnabled() {
-  if (state.current.game !== "Draw the Picture") return false;
-  if (state.current.phase === "play") return !isHost();
-  if (state.current.phase === "lobby") return isHost() && Date.now() < hostTimerEnd;
-  return false;
+  return state.current.game === "Draw the Picture" && state.current.phase === "play";
+}
+
+function pictureOf(person) {
+  return state.current.drawings?.[person]?.image || "";
 }
 
 function renderPicture() {
   const phase = state.current.phase;
   const host = hostName();
-  const reference = roundDrawing(host);
   if (phase === "lobby") {
-    const running = Date.now() < hostTimerEnd;
     app.innerHTML = `<section class="panel game-shell">
-      ${gameTop("DRAW THE PICTURE · VORBEREITUNG", "Das Original")}
-      <p class="rule-note">Die Spielleitung malt vor dem Termin ein Bild in maximal 60 Sekunden – hier im Browser oder in Paint und dann hochladen. Im Termin beschreibt sie das Bild, alle anderen malen nach.</p>
-      ${isHost() ? `
-        <div class="timer-row"><button class="button secondary" type="button" data-action="host-timer">${running ? "Läuft …" : reference ? "Neu malen (60 s)" : "60-Sekunden-Timer starten"}</button><strong class="clock-value" data-host-timer>${running ? Math.ceil((hostTimerEnd - Date.now()) / 1000) : 60} s</strong></div>
-        ${canvasHtml(running ? "Malen! Nach 60 Sekunden wird das Bild gesperrt und gespeichert." : "Timer starten zum Malen oder ein Bild hochladen.")}
-        <div class="review-footer"><span>${reference ? "✓ Original gespeichert" : "Noch kein Original gespeichert"}</span><button class="button primary large" type="button" data-action="picture-start" ${reference ? "" : "disabled"}>Beschreibung starten</button></div>`
-        : waitingBox(`${esc(host)} hat ein Bild gemalt`, "Gleich beschreibt die Spielleitung das Bild. Dann malst du hier im Browser nach.")}
+      ${gameTop("DRAW THE PICTURE · WARTERAUM", "Malen nach Beschreibung")}
+      <p class="rule-note">${esc(host)} malt live ein Bild und beschreibt dabei laut, was entsteht. Alle anderen malen gleichzeitig nach – nur nach der Beschreibung, ohne das Original zu sehen. Danach wählt ${esc(host)}, welches Bild am besten passt.</p>
+      <div class="section-heading"><div><h3>${activePeople().length} von ${PEOPLE.length} eingeloggt</h3></div></div>
+      ${renderPeopleGrid(activePeople())}
+      <div class="section-heading"><div><p class="eyebrow">START</p><h2>${isHost() ? "Alle bereit?" : `Warte auf ${esc(host)}`}</h2></div>${isHost() ? `<button class="button primary large" type="button" data-action="picture-start">Malen starten</button>` : ""}</div>
     </section>`;
     return;
   }
   if (phase === "play") {
-    const submitted = others().filter(person => roundDrawing(person)).length;
     app.innerHTML = `<section class="panel game-shell">
-      ${gameTop("DRAW THE PICTURE · MALEN", isHost() ? "Beschreibe dein Bild" : `Hör ${esc(host)} zu und male`)}
-      ${isHost() ? `<div class="picture-ref"><img src="${reference?.image || ""}" alt="Original"></div>
-        <div class="review-footer"><span>${submitted} von ${others().length} malen mit (wird laufend gespeichert)</span><button class="button primary large" type="button" data-action="picture-stop">Beschreibung fertig – Malen stoppen</button></div>`
-      : canvasHtml("Wird automatisch gespeichert. Sobald die Spielleitung stoppt, ist das Bild eingereicht.")}
+      ${gameTop("DRAW THE PICTURE · MALEN", isHost() ? "Male und beschreibe laut" : `Hör ${esc(host)} zu und male nach`)}
+      ${canvasHtml(isHost() ? "Dein Bild ist das Original. Beschreibe laut, was du malst. Wenn du fertig bist: stoppen." : "Male nach der Beschreibung. Beim Stoppen durch die Spielleitung wird dein Bild automatisch eingereicht.")}
+      ${isHost() ? `<div class="review-footer"><span>Alle Bilder werden beim Stoppen eingesammelt.</span><button class="button primary large" type="button" data-action="picture-stop">Fertig – Malen stoppen</button></div>` : ""}
     </section>`;
     return;
   }
-  const gallery = others().filter(person => roundDrawing(person)).sort((a, b) => (roundDrawing(a).updatedAt || 0) - (roundDrawing(b).updatedAt || 0));
+  const submitted = others().filter(person => pictureOf(person));
   if (phase === "review") {
     app.innerHTML = `<section class="panel game-shell">
       ${gameTop("DRAW THE PICTURE · VERGLEICH", "Welches Bild passt am besten?")}
-      <div class="picture-ref"><span class="tag">Original von ${esc(host)}</span><img src="${reference?.image || ""}" alt="Original"></div>
-      <div class="gallery">${gallery.map(person => `<figure class="gallery-item"><img src="${roundDrawing(person).image}" alt="Bild von ${esc(person)}"><figcaption>${esc(person)}${isHost() ? `<button class="button secondary small" type="button" data-action="picture-pick" data-person="${esc(person)}">Passt am besten</button>` : ""}</figcaption></figure>`).join("") || "<p>Keine Bilder eingereicht.</p>"}</div>
+      <div class="picture-ref"><span class="tag">Original von ${esc(host)}</span>${pictureOf(host) ? `<img src="${pictureOf(host)}" alt="Original">` : "<p>Original wird geladen …</p>"}</div>
+      <div class="gallery">${submitted.map(person => `<figure class="gallery-item"><img src="${pictureOf(person)}" alt="Bild von ${esc(person)}"><figcaption>${esc(person)}${isHost() ? `<button class="button secondary small" type="button" data-action="picture-pick" data-person="${esc(person)}">Passt am besten</button>` : ""}</figcaption></figure>`).join("") || "<p>Noch keine Bilder eingetroffen …</p>"}</div>
+      <p class="canvas-note">${submitted.length} von ${others().length} Bildern eingereicht.</p>
       ${isHost() ? "" : `<p class="rule-note">${esc(host)} wählt das Bild, das am besten passt.</p>`}
     </section>`;
     return;
@@ -1342,7 +1329,7 @@ function renderPicture() {
   const no = Object.values(verdict).filter(value => value === "no").length;
   app.innerHTML = `<section class="panel game-shell">
     ${gameTop("DRAW THE PICTURE · URTEIL", "Passt das wirklich?")}
-    <div class="compare"><figure><img src="${reference?.image || ""}" alt="Original"><figcaption>Original · ${esc(host)}</figcaption></figure><figure><img src="${roundDrawing(pick)?.image || ""}" alt="Bild von ${esc(pick)}"><figcaption>Gewählt · ${esc(pick)}</figcaption></figure></div>
+    <div class="compare"><figure><img src="${pictureOf(host)}" alt="Original"><figcaption>Original · ${esc(host)}</figcaption></figure><figure><img src="${pictureOf(pick)}" alt="Bild von ${esc(pick)}"><figcaption>Gewählt · ${esc(pick)}</figcaption></figure></div>
     <p class="rule-note">Gute Übereinstimmung: ${esc(host)} und ${esc(pick)} erhalten je 6 Punkte. Mehrheit sagt „passt nicht“: ${esc(host)} erhält 6 Punkte Abzug.</p>
     ${isHost() ? "" : `<div class="button-row outcome-row"><button class="button ${mine === "yes" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="yes">👍 Passt</button><button class="button ${mine === "no" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="no">👎 Passt nicht</button></div>`}
     <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${yes + no} von ${others().length} Stimmen</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="verdict-close">Abschliessen</button>` : ""}</div>
@@ -1366,38 +1353,43 @@ function closePicture() {
 }
 
 let canvasCtx = null;
+let undoStack = [];
 function mountCanvas() {
   const canvas = document.querySelector("#draw-canvas");
   canvasCtx = null;
   if (!canvas) return;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   canvasCtx = ctx;
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  const source = localDrawing.roundId === state.current.id && localDrawing.dataUrl ? localDrawing.dataUrl : roundDrawing(currentUser)?.image;
-  if (source) {
+  if (localDrawing.roundId !== state.current.id) { localDrawing = { roundId: state.current.id, dataUrl: "" }; undoStack = []; }
+  if (localDrawing.dataUrl) {
     const image = new Image();
     image.onload = () => ctx.drawImage(image, 0, 0, CANVAS_W, CANVAS_H);
-    image.src = source;
+    image.src = localDrawing.dataUrl;
   }
   canvas.classList.toggle("locked", !canvasEnabled());
   let last = null;
   const point = event => {
     const rect = canvas.getBoundingClientRect();
-    return [(event.clientX - rect.left) * CANVAS_W / rect.width, (event.clientY - rect.top) * CANVAS_H / rect.height];
+    return [Math.round((event.clientX - rect.left) * CANVAS_W / rect.width), Math.round((event.clientY - rect.top) * CANVAS_H / rect.height)];
   };
+  const color = () => penTool === "eraser" ? "#ffffff" : penColor;
   canvas.addEventListener("pointerdown", event => {
     if (!canvasEnabled()) return;
+    pushUndo();
+    const start = point(event);
+    if (penTool === "fill") { floodFill(ctx, start[0], start[1], penColor); storeLocalCanvas(); return; }
     pointerDown = true;
     canvas.setPointerCapture(event.pointerId);
-    last = point(event);
-    ctx.fillStyle = penColor;
+    last = start;
+    ctx.fillStyle = color();
     ctx.beginPath(); ctx.arc(last[0], last[1], penSize / 2, 0, Math.PI * 2); ctx.fill();
   });
   canvas.addEventListener("pointermove", event => {
     if (!pointerDown || !canvasEnabled()) return;
     const next = point(event);
-    ctx.strokeStyle = penColor; ctx.lineWidth = penSize; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = color(); ctx.lineWidth = penSize; ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(next[0], next[1]); ctx.stroke();
     last = next;
   });
@@ -1405,65 +1397,104 @@ function mountCanvas() {
     if (!pointerDown) return;
     pointerDown = false;
     storeLocalCanvas();
-    queueDrawingSave();
   };
   canvas.addEventListener("pointerup", end);
   canvas.addEventListener("pointercancel", end);
 }
 
+function pushUndo() {
+  if (!canvasCtx) return;
+  undoStack.push(canvasCtx.getImageData(0, 0, CANVAS_W, CANVAS_H));
+  if (undoStack.length > 20) undoStack.shift();
+}
+
+function hexToRgb(hex) {
+  const value = parseInt(hex.slice(1), 16);
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+}
+
+// Füllwerkzeug: zusammenhängende, ähnlich gefärbte Fläche einfärben
+function floodFill(ctx, x, y, hex) {
+  const image = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H);
+  const data = image.data;
+  const start = (y * CANVAS_W + x) * 4;
+  const target = [data[start], data[start + 1], data[start + 2]];
+  const fill = hexToRgb(hex);
+  if (Math.abs(target[0] - fill[0]) + Math.abs(target[1] - fill[1]) + Math.abs(target[2] - fill[2]) < 10) return;
+  const tolerance = 90;
+  const matches = index => Math.abs(data[index] - target[0]) + Math.abs(data[index + 1] - target[1]) + Math.abs(data[index + 2] - target[2]) <= tolerance;
+  const seen = new Uint8Array(CANVAS_W * CANVAS_H);
+  const stack = [[x, y]];
+  while (stack.length) {
+    const [px, py] = stack.pop();
+    let cx = px;
+    while (cx >= 0 && !seen[py * CANVAS_W + cx] && matches((py * CANVAS_W + cx) * 4)) cx -= 1;
+    cx += 1;
+    let up = false, down = false;
+    while (cx < CANVAS_W && !seen[py * CANVAS_W + cx] && matches((py * CANVAS_W + cx) * 4)) {
+      const pos = py * CANVAS_W + cx;
+      seen[pos] = 1;
+      data[pos * 4] = fill[0]; data[pos * 4 + 1] = fill[1]; data[pos * 4 + 2] = fill[2]; data[pos * 4 + 3] = 255;
+      if (py > 0) {
+        const upOk = !seen[pos - CANVAS_W] && matches((pos - CANVAS_W) * 4);
+        if (upOk && !up) { stack.push([cx, py - 1]); up = true; } else if (!upOk) up = false;
+      }
+      if (py < CANVAS_H - 1) {
+        const downOk = !seen[pos + CANVAS_W] && matches((pos + CANVAS_W) * 4);
+        if (downOk && !down) { stack.push([cx, py + 1]); down = true; } else if (!downOk) down = false;
+      }
+      cx += 1;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
 function storeLocalCanvas() {
   const canvas = document.querySelector("#draw-canvas");
   if (!canvas) return;
-  localDrawing = { roundId: state.current.id, dataUrl: canvas.toDataURL("image/jpeg", 0.7) };
+  localDrawing = { roundId: state.current.id, dataUrl: canvas.toDataURL("image/jpeg", 0.6) };
 }
 
-function queueDrawingSave(immediate = false) {
-  clearTimeout(drawingSaveTimer);
-  const run = () => {
-    if (!store || localDrawing.roundId !== state.current.id || !localDrawing.dataUrl) return;
-    store.saveDrawing(currentUser, { roundId: state.current.id, image: localDrawing.dataUrl, updatedAt: Date.now(), role: isHost() ? "host" : "player" }).catch(error => { console.warn(error); showToast("Bild konnte nicht gespeichert werden"); });
-  };
-  if (immediate) run(); else drawingSaveTimer = setTimeout(run, 500);
+// Bild einreichen (einmal beim Stoppen), Ziel < 120 KB pro Bild
+let submittedRound = "";
+function submitDrawing() {
+  if (submittedRound === state.current.id) return;
+  if (document.querySelector("#draw-canvas") && state.current.phase === "play") storeLocalCanvas();
+  if (localDrawing.roundId !== state.current.id || !localDrawing.dataUrl) return;
+  submittedRound = state.current.id;
+  shrinkImage(localDrawing.dataUrl).then(image => {
+    syncPatch({ current: { drawings: { [currentUser]: { image, at: Date.now() } } } }, { rerender: false });
+  });
 }
 
-function startHostTimer() {
-  if (!isHost()) return;
-  localDrawing = { roundId: state.current.id, dataUrl: "" };
-  hostTimerEnd = Date.now() + 60000;
-  clearInterval(hostTimerHandle);
-  hostTimerHandle = setInterval(() => {
-    const label = document.querySelector("[data-host-timer]");
-    const left = Math.max(0, Math.ceil((hostTimerEnd - Date.now()) / 1000));
-    if (label) label.textContent = `${left} s`;
-    if (left <= 0) {
-      clearInterval(hostTimerHandle);
-      pointerDown = false;
-      storeLocalCanvas();
-      queueDrawingSave(true);
-      showToast("Zeit abgelaufen – Original gespeichert");
-      render();
-    }
-  }, 250);
-  render();
+function shrinkImage(dataUrl) {
+  return new Promise(resolve => {
+    if (dataUrl.length < 70000) return resolve(dataUrl);
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = CANVAS_W / 2; canvas.height = CANVAS_H / 2;
+      canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.6));
+    };
+    image.src = dataUrl;
+  });
 }
 
 function uploadImage(file) {
-  if (!file || !canvasCtx) return;
-  if (state.current.phase === "lobby" && !isHost()) return;
-  if (state.current.phase !== "lobby" && !canvasEnabled()) return;
+  if (!file || !canvasCtx || !canvasEnabled()) return;
   const reader = new FileReader();
   reader.onload = () => {
     const image = new Image();
     image.onload = () => {
+      pushUndo();
       const ctx = canvasCtx;
       ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
       const scale = Math.min(CANVAS_W / image.width, CANVAS_H / image.height);
       const w = image.width * scale, h = image.height * scale;
       ctx.drawImage(image, (CANVAS_W - w) / 2, (CANVAS_H - h) / 2, w, h);
       storeLocalCanvas();
-      queueDrawingSave(true);
-      showToast("Bild gespeichert");
-      setTimeout(render, 300);
+      showToast("Bild übernommen");
     };
     image.src = reader.result;
   };
@@ -1485,16 +1516,23 @@ function handleCustomAction(action, event) {
   });
   if (action === "vote-dings" && person && person !== currentUser && !isHost() && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
   if (action === "dings-close" && isHost()) closeDingsbums();
-  if (action === "host-timer") startHostTimer();
-  if (action === "picture-start") setPhase("play");
-  if (action === "picture-stop") setPhase("review", next => { next.current.endedAt = Date.now(); });
+  if (action === "picture-start") setPhase("play", next => { next.current.drawings = {}; next.current.pick = null; next.current.verdict = {}; });
+  if (action === "picture-stop" && isHost()) { submitDrawing(); setTimeout(() => setPhase("review", next => { next.current.endedAt = Date.now(); }), 300); }
+  if (action === "pen-tool") { penTool = event.target.closest("[data-tool]").dataset.tool; document.querySelectorAll(".tool").forEach(tool => tool.classList.toggle("active", tool.dataset.tool === penTool)); }
+  if (action === "canvas-undo" && canvasCtx && canvasEnabled() && undoStack.length) { canvasCtx.putImageData(undoStack.pop(), 0, 0); storeLocalCanvas(); }
   if (action === "picture-pick" && person) setPhase("vote", next => { next.current.pick = person; next.current.verdict = {}; });
   if (action === "verdict" && !isHost() && state.current.phase === "vote") syncPatch({ current: { verdict: { [currentUser]: event.target.closest("[data-value]").dataset.value } } });
   if (action === "verdict-close" && isHost()) closePicture();
-  if (action === "pen-color") { penColor = event.target.closest("[data-color]").dataset.color; document.querySelectorAll(".pen").forEach(pen => pen.classList.toggle("active", pen.dataset.color === penColor)); }
-  if (action === "canvas-clear" && canvasCtx && (canvasEnabled() || (isHost() && state.current.phase === "lobby"))) {
+  if (action === "pen-color") {
+    penColor = event.target.closest("[data-color]").dataset.color;
+    if (penTool === "eraser") penTool = "pen";
+    document.querySelectorAll(".pen").forEach(pen => pen.classList.toggle("active", pen.dataset.color === penColor));
+    document.querySelectorAll(".tool").forEach(tool => tool.classList.toggle("active", tool.dataset.tool === penTool));
+  }
+  if (action === "canvas-clear" && canvasCtx && canvasEnabled()) {
+    pushUndo();
     canvasCtx.fillStyle = "#fff"; canvasCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    if (canvasEnabled()) { storeLocalCanvas(); queueDrawingSave(); }
+    storeLocalCanvas();
   }
 }
 
@@ -1538,10 +1576,7 @@ app.addEventListener("change", event => {
 // Beim Phasenwechsel letzte Zeichnung sofort sichern
 function trackPhase() {
   const phase = `${state.current.id}|${state.current.phase}`;
-  if (lastPhaseSeen && lastPhaseSeen !== phase && lastPhaseSeen.endsWith("|play") && state.current.game === "Draw the Picture" && !isHost()) {
-    storeLocalCanvas();
-    queueDrawingSave(true);
-  }
+  if (state.current.game === "Draw the Picture" && state.current.phase === "review" && lastPhaseSeen.endsWith("|play")) submitDrawing();
   lastPhaseSeen = phase;
 }
 
