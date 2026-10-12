@@ -736,8 +736,8 @@ function finishHero(winner) {
   mutate(next => {
     const totals = PEOPLE.reduce((result,person) => ({ ...result, [person]: 0 }),{});
     Object.values(next.current.votes || {}).forEach(person => { if (person in totals) totals[person] += 1; });
-    const voters = Object.keys(next.current.votes || {});
-    next.current.results = PEOPLE.filter(person => voters.includes(person) || person === winner).map(person => ({ person, points: person === winner ? 6 : 0, raw: totals[person], rank: person === winner ? 1 : 2, detail: `${totals[person]} ${totals[person] === 1 ? "Stimme" : "Stimmen"}` })).sort((a,b) => b.points-a.points || b.raw-a.raw || a.person.localeCompare(b.person));
+    // Resultat: alle mit mindestens 1 Stimme (eingeloggt oder nicht), absteigend nach Stimmen
+    next.current.results = PEOPLE.filter(person => totals[person] > 0 || person === winner).map(person => ({ person, points: person === winner ? 6 : 0, raw: totals[person], rank: person === winner ? 1 : 2, detail: `${totals[person]} ${totals[person] === 1 ? "Stimme" : "Stimmen"}` })).sort((a,b) => b.points-a.points || b.raw-a.raw || a.person.localeCompare(b.person));
     next.current.endedAt = Date.now();
     next.current.phase = "results";
   });
