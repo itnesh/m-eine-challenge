@@ -223,6 +223,11 @@ function initials(name) {
   return name.slice(0, 2).toUpperCase();
 }
 
+// Wer in der laufenden Runde (ABCD/SLF) etwas eingegeben hat
+function roundPlayers() {
+  return PEOPLE.filter(person => Object.values(state.current.drafts[person]?.terms || {}).some(value => String(value || "").trim()));
+}
+
 function playerNames() {
   return PEOPLE;
 }
@@ -588,7 +593,7 @@ function renderAbcdReview() {
     ${gameTop("ABCD-JAGD · AUSWERTUNG", "Kompakte Begriffsmatrix")}
     <p class="rule-note">Leere oder falsche Begriffe erhalten ×. Ein eigener korrekter Begriff erhält ✓, ein geteilter korrekter Begriff ½.</p>
     ${renderMatrixLegend()}
-    <div class="review-table-wrap"><table><thead><tr><th>Person</th>${state.current.letters.map(letter => `<th>${letter}</th>`).join("")}</tr></thead><tbody>${playerNames().map(person => `<tr><td><strong>${esc(person)}</strong></td>${state.current.letters.map(letter => renderMatrixCell("abcd",person,letter)).join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="review-table-wrap"><table><thead><tr><th>Person</th>${state.current.letters.map(letter => `<th>${letter}</th>`).join("")}</tr></thead><tbody>${roundPlayers().map(person => `<tr><td><strong>${esc(person)}</strong></td>${state.current.letters.map(letter => renderMatrixCell("abcd",person,letter)).join("")}</tr>`).join("")}</tbody></table></div>
     <div class="review-footer"><span></span><button class="button primary large" type="button" data-action="calculate-results">Punkte berechnen</button></div>
   </section>`;
 }
@@ -693,7 +698,7 @@ function renderHeroPlay() {
     ${gameTop("STILLER HELD · ABSTIMMUNG", "Deine Stimme zählt")}
     <p class="rule-note">Wähle genau eine Person – auch dich selbst, wenn du findest, dass du der stille Held warst. Du kannst deine Stimme bis zum Abschluss ändern.</p>
     <div class="vote-grid">${PEOPLE.map(person => `<button class="vote-card ${selected === person ? "selected" : ""}" type="button" data-action="vote-hero" data-person="${esc(person)}"><span class="avatar">${initials(person)}</span><span>${esc(person)}${person === currentUser ? " · ich" : ""}</span>${selected === person ? `<span class="check">✓</span>` : ""}</button>`).join("")}</div>
-    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${PEOPLE.length} Stimmen abgegeben</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="close-hero" ${voteCount ? "" : "disabled"}>Abstimmung schliessen</button>` : `<p>Die Resultate bleiben bis zum Abschluss geheim.</p>`}</div>
+    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${Math.max(activePeople().length, voteCount)} Stimmen abgegeben</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="close-hero" ${voteCount ? "" : "disabled"}>Abstimmung schliessen</button>` : `<p>Die Resultate bleiben bis zum Abschluss geheim.</p>`}</div>
   </section>`;
 }
 
@@ -731,7 +736,8 @@ function finishHero(winner) {
   mutate(next => {
     const totals = PEOPLE.reduce((result,person) => ({ ...result, [person]: 0 }),{});
     Object.values(next.current.votes || {}).forEach(person => { if (person in totals) totals[person] += 1; });
-    next.current.results = PEOPLE.map(person => ({ person, points: person === winner ? 6 : 0, raw: totals[person], rank: person === winner ? 1 : 2, detail: `${totals[person]} ${totals[person] === 1 ? "Stimme" : "Stimmen"}` })).sort((a,b) => b.points-a.points || b.raw-a.raw || a.person.localeCompare(b.person));
+    const voters = Object.keys(next.current.votes || {});
+    next.current.results = PEOPLE.filter(person => voters.includes(person) || person === winner).map(person => ({ person, points: person === winner ? 6 : 0, raw: totals[person], rank: person === winner ? 1 : 2, detail: `${totals[person]} ${totals[person] === 1 ? "Stimme" : "Stimmen"}` })).sort((a,b) => b.points-a.points || b.raw-a.raw || a.person.localeCompare(b.person));
     next.current.endedAt = Date.now();
     next.current.phase = "results";
   });
@@ -778,7 +784,7 @@ function renderSlfReview() {
     ${gameTop("STADT–LAND–FLUSS · AUSWERTUNG", "Die gemeinsame Begriffsmatrix")}
     <p class="rule-note">Das System markiert gleiche Begriffe automatisch. Die Spielleitung korrigiert kompakt mit ✓, ½ oder ×.</p>
     ${renderMatrixLegend()}
-    <div class="review-table-wrap"><table><thead><tr><th>Person</th>${state.current.categories.map(category => `<th>${esc(category)}</th>`).join("")}</tr></thead><tbody>${playerNames().map(person => `<tr><td><strong>${esc(person)}</strong></td>${state.current.categories.map(category => renderMatrixCell("slf",person,category)).join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="review-table-wrap"><table><thead><tr><th>Person</th>${state.current.categories.map(category => `<th>${esc(category)}</th>`).join("")}</tr></thead><tbody>${roundPlayers().map(person => `<tr><td><strong>${esc(person)}</strong></td>${state.current.categories.map(category => renderMatrixCell("slf",person,category)).join("")}</tr>`).join("")}</tbody></table></div>
     <div class="review-footer"><span></span><button class="button primary large" type="button" data-action="calculate-results">Punkte berechnen</button></div>
   </section>`;
 }
@@ -798,7 +804,8 @@ function calculateResults() {
   if (!isHost()) return;
   mutate(next => {
     const round = next.current;
-    const entries = round.game === "Stadt–Land–Fluss" ? scoreSlf(round) : scoreAbcd(round);
+    const played = person => Object.values(round.drafts[person]?.terms || {}).some(value => String(value || "").trim());
+    const entries = (round.game === "Stadt–Land–Fluss" ? scoreSlf(round) : scoreAbcd(round)).filter(entry => played(entry.person));
     round.results = rankEntries(entries);
     round.phase = "results";
   });
@@ -1041,10 +1048,12 @@ function canvasBusy() {
 
 function hostName() { return state.current.host; }
 function others() { return PEOPLE.filter(person => person !== hostName()); }
-function finishWith(points, details) {
+// Resultate nur für aktive Teilnehmende; alle anderen werden nicht berücksichtigt
+function finishWith(points, details, participants = PEOPLE) {
   if (!isHost()) return;
+  const included = PEOPLE.filter(person => participants.includes(person));
   mutate(next => {
-    next.current.results = PEOPLE.map(person => ({ person, points: Math.min(6, points[person] || 0), raw: points[person] || 0, detail: details[person] || "–" }))
+    next.current.results = included.map(person => ({ person, points: Math.min(6, points[person] || 0), raw: points[person] || 0, detail: details[person] || "–" }))
       .sort((a, b) => b.points - a.points || a.person.localeCompare(b.person));
     next.current.endedAt = Date.now();
     next.current.phase = "results";
@@ -1113,8 +1122,12 @@ function finishAssignment(done) {
   } else {
     others().forEach(person => { points[person] = 6; details[person] = cooking ? "Cooking verhängt" : "Podcast nicht geliefert"; });
     points[host] = 0; details[host] = cooking ? "nicht gekocht" : "nicht geliefert";
+    return finishWith(points, details, PEOPLE);
   }
-  finishWith(points, details);
+  const participants = cooking
+    ? [host, ...(Array.isArray(state.current.participants) ? state.current.participants : others())]
+    : [host, ...activePeople()];
+  finishWith(points, details, participants);
 }
 
 // ---------- Dümmste Erfindung ----------
@@ -1155,21 +1168,24 @@ function renderInvention() {
     return;
   }
   const authors = PEOPLE.filter(person => entries[person]);
+  const canVote = authors.includes(currentUser);
   const myVote = state.current.votes[currentUser] || "";
-  const voteCount = Object.keys(state.current.votes).length;
+  const voteCount = authors.filter(person => state.current.votes[person]).length;
   app.innerHTML = `<section class="panel game-shell">
     ${gameTop("DÜMMSTE ERFINDUNG · ABSTIMMUNG", "Welches Plädoyer hat überzeugt?")}
     <p class="rule-note">Gib geheim eine Stimme ab. Die eigene Erfindung kann nicht gewählt werden. Wer am meisten Stimmen erhält, bekommt 6 Punkte.</p>
-    <div class="vote-grid">${authors.map(person => `<button class="vote-card ${myVote === person ? "selected" : ""}" type="button" data-action="vote-invention" data-person="${esc(person)}" ${person === currentUser ? "disabled" : ""}><span class="avatar">${initials(person)}</span><span><strong>${esc(entries[person])}</strong><br><small>${esc(person)}${person === currentUser ? " · ich" : ""}</small></span>${myVote === person ? `<span class="check">✓</span>` : ""}</button>`).join("")}</div>
-    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${PEOPLE.length} Stimmen abgegeben</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="invention-close" ${voteCount ? "" : "disabled"}>Abstimmung schliessen</button>` : "<p>Resultat bleibt bis zum Abschluss geheim.</p>"}</div>
+    <div class="vote-grid">${authors.map(person => `<button class="vote-card ${myVote === person ? "selected" : ""}" type="button" data-action="vote-invention" data-person="${esc(person)}" ${!canVote || person === currentUser ? "disabled" : ""}><span class="avatar">${initials(person)}</span><span><strong>${esc(entries[person])}</strong><br><small>${esc(person)}${person === currentUser ? " · ich" : ""}</small></span>${myVote === person ? `<span class="check">✓</span>` : ""}</button>`).join("")}</div>
+    ${canVote ? "" : `<p class="canvas-note">Abstimmen dürfen nur Personen, die ein Plädoyer gehalten haben.</p>`}
+    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${authors.length} Stimmen abgegeben</h3><p class="canvas-note">Stimmberechtigt: ${authors.map(esc).join(", ")}</p></div>${isHost() ? `<button class="button primary" type="button" data-action="invention-close" ${voteCount ? "" : "disabled"}>Abstimmung schliessen</button>` : "<p>Resultat bleibt bis zum Abschluss geheim.</p>"}</div>
   </section>`;
 }
 
 function closeInvention() {
   if (!isHost()) return;
   const entries = state.current.entries;
+  const authors = PEOPLE.filter(person => entries[person]);
   const totals = {};
-  Object.values(state.current.votes).forEach(person => { totals[person] = (totals[person] || 0) + 1; });
+  Object.entries(state.current.votes).forEach(([voter, person]) => { if (authors.includes(voter)) totals[person] = (totals[person] || 0) + 1; });
   const max = Math.max(0, ...Object.values(totals));
   const points = {}, details = {};
   PEOPLE.forEach(person => {
@@ -1180,7 +1196,7 @@ function closeInvention() {
   const date = today();
   mutate(next => {
     next.current.inventions = Object.entries(next.current.entries).map(([person, name]) => ({ name, person, date }));
-    next.current.results = PEOPLE.map(person => ({ person, points: points[person], raw: points[person], detail: details[person] }))
+    next.current.results = authors.map(person => ({ person, points: points[person], raw: points[person], detail: details[person] }))
       .sort((a, b) => b.points - a.points || a.person.localeCompare(b.person));
     next.current.endedAt = Date.now();
     next.current.phase = "results";
@@ -1188,6 +1204,10 @@ function closeInvention() {
 }
 
 // ---------- Dingsbums ----------
+// Teilnehmende: alle ausser Spielleitung, die eine Variante abgegeben haben
+function dingsVoters() {
+  return others().filter(person => state.current.entries[person]);
+}
 function dingsbumsSentence(variant) {
   const sentence = esc(state.current.secret.sentence || "");
   return sentence.replace(/dingsbums/i, `<mark>${variant ? esc(variant) : "DINGSBUMS"}</mark>`);
@@ -1232,24 +1252,27 @@ function renderDingsbums() {
   // vote
   const order = Array.isArray(state.current.order) ? state.current.order : [];
   const myVote = state.current.votes[currentUser] || "";
-  const voters = others();
+  const voters = dingsVoters();
+  const canVote = voters.includes(currentUser);
   const voteCount = voters.filter(person => state.current.votes[person]).length;
   const variantOf = person => person === host ? state.current.secret.variant : entries[person];
   app.innerHTML = `<section class="panel game-shell">
     ${gameTop("DINGSBUMS · UMFRAGE", "Welche Variante stammt von der Spielleitung?")}
     <p class="dings-sentence">${dingsbumsSentence()}</p>
-    ${isHost() ? "" : `<p class="rule-note">Tippe auf die Variante, die du ${esc(host)} zutraust. Deine eigene kannst du nicht wählen.</p>`}
-    <div class="vote-grid">${order.map((person, index) => `<button class="vote-card ${myVote === person ? "selected" : ""}" type="button" data-action="vote-dings" data-person="${esc(person)}" ${isHost() || person === currentUser ? "disabled" : ""}><span class="avatar">${String.fromCharCode(65 + index)}</span><span>${esc(variantOf(person))}${person === currentUser ? " · meine" : ""}</span>${myVote === person ? `<span class="check">✓</span>` : ""}</button>`).join("")}</div>
-    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${voters.length} Stimmen abgegeben</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="dings-close" ${voteCount ? "" : "disabled"}>Auflösen</button>` : "<p>Resultat erst nach Abschluss sichtbar.</p>"}</div>
+    ${canVote ? `<p class="rule-note">Tippe auf die Variante, die du ${esc(host)} zutraust. Deine eigene kannst du nicht wählen.</p>` : isHost() ? "" : `<p class="canvas-note">Abstimmen dürfen nur Personen, die eine Variante abgegeben haben.</p>`}
+    <div class="vote-grid">${order.map((person, index) => `<button class="vote-card ${myVote === person ? "selected" : ""}" type="button" data-action="vote-dings" data-person="${esc(person)}" ${!canVote || person === currentUser ? "disabled" : ""}><span class="avatar">${String.fromCharCode(65 + index)}</span><span>${esc(variantOf(person))}${person === currentUser ? " · meine" : ""}</span>${myVote === person ? `<span class="check">✓</span>` : ""}</button>`).join("")}</div>
+    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${voteCount} von ${voters.length} Stimmen abgegeben</h3><p class="canvas-note">Stimmberechtigt: ${voters.map(esc).join(", ") || "–"}</p></div>${isHost() ? `<button class="button primary" type="button" data-action="dings-close" ${voteCount ? "" : "disabled"}>Auflösen</button>` : "<p>Resultat erst nach Abschluss sichtbar.</p>"}</div>
   </section>`;
 }
 
 function closeDingsbums() {
   const host = hostName();
-  const votes = state.current.votes;
+  const votes = { ...state.current.votes };
   const points = {}, details = {};
   PEOPLE.forEach(person => { points[person] = 0; details[person] = []; });
-  const hunters = others().filter(person => votes[person] === host);
+  const allowed = dingsVoters();
+  Object.keys(votes).forEach(person => { if (!allowed.includes(person)) delete votes[person]; });
+  const hunters = allowed.filter(person => votes[person] === host);
   hunters.forEach(person => { points[person] += 6; details[person].push("Spielleitung entlarvt"); });
   if (!hunters.length) { points[host] += 6; details[host].push("niemand hat dich entlarvt"); }
   const received = {};
@@ -1260,8 +1283,8 @@ function closeDingsbums() {
   });
   const flat = {};
   PEOPLE.forEach(person => { flat[person] = details[person].join(" · ") || (state.current.entries[person] ? esc(state.current.entries[person]) : "–"); });
-  flat[host] = `${flat[host]} · Variante: ${state.current.secret.variant}`;
-  finishWith(points, flat);
+  flat[host] = [...details[host], `Variante: ${state.current.secret.variant}`].join(" · ");
+  finishWith(points, flat, [host, ...dingsVoters()]);
 }
 
 // ---------- Draw the Picture ----------
@@ -1357,7 +1380,7 @@ function closePicture() {
   } else {
     points[host] = -6; details[host] = `schlecht beschrieben (${yes}:${no})`;
   }
-  finishWith(points, details);
+  finishWith(points, details, [host, ...voters]);
 }
 
 let canvasCtx = null;
@@ -1515,14 +1538,14 @@ function handleCustomAction(action, event) {
   if (action === "outcome-done") finishAssignment(true);
   if (action === "outcome-failed") finishAssignment(false);
   if (action === "invention-vote") setPhase("vote", next => { next.current.votes = {}; });
-  if (action === "vote-invention" && person && person !== currentUser && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
+  if (action === "vote-invention" && person && person !== currentUser && state.current.entries[currentUser] && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
   if (action === "invention-close") closeInvention();
   if (action === "dings-start") setPhase("play", next => { next.current.entries = {}; });
   if (action === "dings-vote") setPhase("vote", next => {
     next.current.votes = {};
     next.current.order = shuffle([next.current.host, ...PEOPLE.filter(name => name !== next.current.host && next.current.entries[name])]);
   });
-  if (action === "vote-dings" && person && person !== currentUser && !isHost() && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
+  if (action === "vote-dings" && person && person !== currentUser && dingsVoters().includes(currentUser) && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
   if (action === "dings-close" && isHost()) closeDingsbums();
   if (action === "picture-start") setPhase("play", next => { next.current.drawings = {}; next.current.pick = null; next.current.verdict = {}; });
   if (action === "picture-stop" && isHost()) { submitDrawing(); setTimeout(() => setPhase("review", next => { next.current.endedAt = Date.now(); }), 300); }
