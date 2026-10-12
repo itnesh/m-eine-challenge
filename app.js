@@ -152,7 +152,7 @@ async function connect() {
   try {
     store = await createStore(teamCode, freshState);
     const offState = store.subscribe(onRemoteState, reportError);
-    const offDrawings = store.subscribeDrawings(onDrawings, reportError);
+    const offDrawings = store.subscribeDrawings(onDrawings, error => console.warn("Zeichnungen nicht verfügbar", error));
     unsubscribe = () => { offState?.(); offDrawings?.(); };
     if (currentUser) markPresent(currentUser);
   } catch (error) {
@@ -1412,7 +1412,7 @@ function queueDrawingSave(immediate = false) {
   clearTimeout(drawingSaveTimer);
   const run = () => {
     if (!store || localDrawing.roundId !== state.current.id || !localDrawing.dataUrl) return;
-    store.saveDrawing(currentUser, { roundId: state.current.id, image: localDrawing.dataUrl, updatedAt: Date.now(), role: isHost() ? "host" : "player" }).catch(reportError);
+    store.saveDrawing(currentUser, { roundId: state.current.id, image: localDrawing.dataUrl, updatedAt: Date.now(), role: isHost() ? "host" : "player" }).catch(error => { console.warn(error); showToast("Bild konnte nicht gespeichert werden"); });
   };
   if (immediate) run(); else drawingSaveTimer = setTimeout(run, 500);
 }
