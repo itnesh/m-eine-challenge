@@ -970,7 +970,7 @@ const RULES = [
     steps: ["Die ausgeloste Spielleitung bereitet für die nächste Woche ein Live-Cooking vor.", "Sie teilt mit, was eingekauft werden muss. Alle anderen kaufen ein.", "Im Termin wird gemeinsam gekocht.", "Die Spielleitung erfasst in der App, ob das Cooking stattgefunden hat und wer mitgekocht hat."],
     scoring: ["Durchgeführt: Spielleitung 6 Punkte, alle Teilnehmenden 3 Punkte.", "Nicht durchgeführt (verhängt): alle anderen 6 Punkte, Spielleitung 0."] },
   { game: "Dümmste Erfindung", tagline: "Das beste Plädoyer für die sinnloseste Erfindung.",
-    steps: ["Jede Person bereitet ein kurzes Plädoyer vor, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt.", "Alle erfassen ihr Stichwort in der App. So wächst die Liste der Erfindungen.", "Bereits in früheren Sessions vorgestellte Erfindungen sind gesperrt.", "Nach allen Plädoyers startet die Spielleitung die geheime Abstimmung. Die eigene Erfindung kann nicht gewählt werden."],
+    steps: ["Jede Person bereitet ein kurzes Plädoyer vor, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt.", "Die Spielleitung gibt die Erfassung frei. Danach erfassen alle ihr Stichwort in der App. So wächst die Liste der Erfindungen.", "Bereits in früheren Sessions vorgestellte Erfindungen sind gesperrt.", "Nach allen Plädoyers startet die Spielleitung die geheime Abstimmung. Die eigene Erfindung kann nicht gewählt werden."],
     scoring: ["Wer die meisten Stimmen erhält, bekommt 6 Punkte. Bei Gleichstand erhalten alle Bestplatzierten 6 Punkte."] },
   { game: "Draw the Picture", tagline: "Beschreiben, nachmalen, vergleichen.",
     steps: ["Die Spielleitung startet das Malen. Alle malen gleichzeitig im Browser – mit Stift, Füllen und Radierer.", "Die Spielleitung malt das Original und beschreibt dabei laut, was sie malt. Die anderen malen nur nach der Beschreibung nach.", "Ist die Spielleitung fertig, stoppt sie das Malen. Alle Bilder werden automatisch eingereicht.", "Die Spielleitung sieht alle Bilder neben ihrem Original und wählt das passendste. Danach stimmen alle ab, die ein Bild eingereicht haben: passt oder passt nicht."],
@@ -1154,9 +1154,18 @@ function renderInvention() {
   const phase = state.current.phase;
   const entries = state.current.entries;
   const mine = entries[currentUser] || "";
+  if (phase === "lobby" && !state.current.open) {
+    app.innerHTML = `<section class="panel game-shell">
+      ${gameTop("DÜMMSTE ERFINDUNG · WARTERAUM", "Welche Erfindung ist die dümmste?")}
+      <p class="rule-note">Jede Person hält ein kurzes Plädoyer, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt. Bereits vorgestellte Erfindungen sind tabu.</p>
+      ${renderInventionArchive()}
+      ${isHost() ? `<div class="review-footer"><span>Erst nach Freigabe können alle ihr Stichwort erfassen.</span><button class="button primary large" type="button" data-action="invention-open">Erfassung freigeben</button></div>` : waitingBox(`Warte auf ${esc(hostName())}`, "Sobald die Spielleitung freigibt, kannst du deine Erfindung erfassen.")}
+    </section>`;
+    return;
+  }
   if (phase === "lobby") {
     app.innerHTML = `<section class="panel game-shell">
-      ${gameTop("DÜMMSTE ERFINDUNG · VORBEREITUNG", "Welche Erfindung ist die dümmste?")}
+      ${gameTop("DÜMMSTE ERFINDUNG · ERFASSUNG", "Welche Erfindung ist die dümmste?")}
       <p class="rule-note">Jede Person hält ein kurzes Plädoyer, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt. Bereits vorgestellte Erfindungen sind tabu. Erfasse hier dein Stichwort.</p>
       <form class="entry-form" data-form="invention"><input data-keep-focus name="entry" maxlength="60" placeholder="Deine Erfindung, z. B. Selfie-Stick" value="${esc(mine)}"><button class="button primary" type="submit">${mine ? "Ändern" : "Erfassen"}</button></form>
       ${mine ? `<p class="entry-ok">✓ Erfasst: <strong>${esc(mine)}</strong></p>` : ""}
@@ -1537,6 +1546,7 @@ function handleCustomAction(action, event) {
   const person = event.target.closest("[data-person]")?.dataset.person;
   if (action === "outcome-done") finishAssignment(true);
   if (action === "outcome-failed") finishAssignment(false);
+  if (action === "invention-open") setPhase("lobby", next => { next.current.open = true; });
   if (action === "invention-vote") setPhase("vote", next => { next.current.votes = {}; });
   if (action === "vote-invention" && person && person !== currentUser && state.current.entries[currentUser] && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
   if (action === "invention-close") closeInvention();
@@ -1572,7 +1582,7 @@ app.addEventListener("submit", event => {
   if (!form) return;
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
-  if (form.dataset.form === "invention") {
+  if (form.dataset.form === "invention" && state.current.open && state.current.phase === "lobby") {
     const value = (data.entry || "").trim();
     if (!value) return;
     const taken = inventionTaken(value, currentUser);
