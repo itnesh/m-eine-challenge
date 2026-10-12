@@ -1170,7 +1170,8 @@ function renderInvention() {
       <form class="entry-form" data-form="invention"><input data-keep-focus name="entry" maxlength="60" placeholder="Deine Erfindung, z. B. Selfie-Stick" value="${esc(mine)}"><button class="button primary" type="submit">${mine ? "Ändern" : "Erfassen"}</button></form>
       ${mine ? `<p class="entry-ok">✓ Erfasst: <strong>${esc(mine)}</strong></p>` : ""}
       ${statusLine(Object.keys(entries).length, PEOPLE.length, "Stichworten erfasst")}
-      <div class="entry-list">${PEOPLE.map(person => `<div class="entry-row ${entries[person] ? "done" : ""}"><span class="avatar">${initials(person)}</span><strong>${esc(person)}</strong><span>${entries[person] ? esc(entries[person]) : "–"}</span></div>`).join("")}</div>
+      <div class="entry-list">${PEOPLE.map(person => `<div class="entry-row ${entries[person] ? "done" : ""}"><span class="avatar">${initials(person)}</span><strong>${esc(person)}</strong><span>${entries[person] ? (person === currentUser ? esc(entries[person]) : "✓ erfasst (geheim)") : "–"}</span></div>`).join("")}</div>
+      <p class="canvas-note">Die Erfindungen der anderen bleiben bis zur Abstimmung geheim – auch für die Spielleitung.</p>
       ${renderInventionArchive()}
       ${isHost() ? `<div class="review-footer"><span>Nach allen Plädoyers:</span><button class="button primary large" type="button" data-action="invention-vote" ${Object.keys(entries).length >= 2 ? "" : "disabled"}>Abstimmung starten</button></div>` : ""}
     </section>`;
