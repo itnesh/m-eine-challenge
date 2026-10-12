@@ -102,6 +102,7 @@ function deepMerge(target, patch) {
   return target;
 }
 
+// Fehler beim Lesen (Verbindungsaufbau): falscher Teamcode -> zurück zum Login
 function reportError(error) {
   console.error(error);
   if (error?.code === "permission-denied") {
@@ -112,6 +113,12 @@ function reportError(error) {
   showToast("Verbindungsproblem – bitte Seite neu laden");
 }
 
+// Fehler beim Schreiben: nie ausloggen, nur melden
+function reportWriteError(error) {
+  console.error(error);
+  showToast(error?.code === "permission-denied" ? "Speichern abgelehnt – bitte Spielleitung informieren" : "Speichern fehlgeschlagen – bitte nochmals versuchen");
+}
+
 // Ganze Zustandsänderung als Transaktion (Spielleitung, Phasenwechsel)
 function mutate(mutator) {
   if (!store) return;
@@ -120,7 +127,7 @@ function mutate(mutator) {
     if (mutator(next) === false) return false;
     Object.keys(raw).forEach(key => delete raw[key]);
     Object.assign(raw, next);
-  }).catch(reportError);
+  }).catch(reportWriteError);
 }
 
 // Kleine Feld-Updates (Eingaben, Stimmen, Präsenz)
@@ -128,7 +135,7 @@ function syncPatch(patch, { rerender = true } = {}) {
   if (!store) return;
   state = normalizeState(deepMerge(structuredClone(state), patch));
   if (rerender) render();
-  store.patch(patch).catch(reportError);
+  store.patch(patch).catch(reportWriteError);
 }
 
 function renderKey() {
@@ -927,7 +934,7 @@ function saveNextWeek() {
   inGame = false;
   mutate(next => {
     const old = next.current;
-    next.history.unshift({ id: old.id, date: today(), game: old.game, host: old.host, scores: old.results, nextGame: old.draw.game, nextHost: old.draw.host });
+    next.history.unshift({ id: old.id, date: today(), game: old.game, host: old.host, scores: old.results, nextGame: old.draw.game, nextHost: old.draw.host, ...(old.inventions ? { inventions: old.inventions } : {}) });
     next.current = {
       id: `week-${Date.now()}`, date: today(), game: old.draw.game, host: old.draw.host, phase: "lobby", letters: [], letter: null,
       categories: ["Stadt", "Land", "Fluss"], startedAt: null, endedAt: null, finisher: null, drafts: {}, reviews: {}, votes: {}, tieCandidates: [], results: null, draw: { game:null, host:null }
@@ -1124,16 +1131,22 @@ function finishAssignment(done) {
 }
 
 // ---------- Dümmste Erfindung ----------
+// Liste aller vorgestellten Erfindungen: aus der Wochenhistorie + abgeschlossener aktueller Runde
+function allInventions() {
+  const fromHistory = state.history.flatMap(week => Array.isArray(week.inventions) ? week.inventions : []);
+  const current = Array.isArray(state.current.inventions) ? state.current.inventions : [];
+  return [...fromHistory, ...current];
+}
 function inventionTaken(name, except) {
   const term = normalizedTerm(name);
   if (!term) return false;
-  if ((state.inventions || []).some(item => normalizedTerm(item.name) === term)) return "bereits in einer früheren Session vorgestellt";
+  if (allInventions().some(item => normalizedTerm(item.name) === term)) return "bereits in einer früheren Session vorgestellt";
   if (Object.entries(state.current.entries).some(([person, value]) => person !== except && normalizedTerm(value) === term)) return "diese Woche schon gewählt";
   return false;
 }
 
 function renderInventionArchive() {
-  const list = state.inventions || [];
+  const list = allInventions();
   return `<details class="archive"><summary>Bereits vorgestellte Erfindungen (${list.length})</summary>${list.length ? `<ul>${list.map(item => `<li><strong>${esc(item.name)}</strong> – ${esc(item.person)}, ${esc(item.date || "")}</li>`).join("")}</ul>` : "<p>Noch keine.</p>"}</details>`;
 }
 
@@ -1179,11 +1192,7 @@ function closeInvention() {
   });
   const date = today();
   mutate(next => {
-    const list = Array.isArray(next.inventions) ? next.inventions : [];
-    Object.entries(next.current.entries).forEach(([person, name]) => {
-      if (!list.some(item => normalizedTerm(item.name) === normalizedTerm(name))) list.push({ name, person, date });
-    });
-    next.inventions = list;
+    next.current.inventions = Object.entries(next.current.entries).map(([person, name]) => ({ name, person, date }));
     next.current.results = PEOPLE.map(person => ({ person, points: points[person], raw: points[person], detail: details[person] }))
       .sort((a, b) => b.points - a.points || a.person.localeCompare(b.person));
     next.current.endedAt = Date.now();

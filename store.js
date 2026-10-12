@@ -73,6 +73,12 @@ async function firebaseStore(config, team, freshState) {
 }
 
 // Mock für lokale Tests: localStorage + BroadcastChannel, gleiche Schnittstelle wie Firestore
+const ALLOWED_KEYS = ["version", "members", "history", "current"];
+function checkRules(data) {
+  const extra = Object.keys(data).filter(key => !ALLOWED_KEYS.includes(key));
+  if (extra.length) { const error = new Error(`Mock-Rules: unerlaubte Felder ${extra}`); error.code = "permission-denied"; throw error; }
+}
+
 function mockStore(team, freshState) {
   const key = `mock-team-${team}`;
   const channel = new BroadcastChannel(key);
@@ -92,6 +98,7 @@ function mockStore(team, freshState) {
     async transact(mutator) {
       const data = read() || freshState();
       if (mutator(data) === false) return;
+      checkRules(data);
       write(clean(data));
       listener?.(read());
     },
