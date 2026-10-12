@@ -965,7 +965,7 @@ const RULES = [
     scoring: ["Geliefert: Spielleitung 6 Punkte.", "Nicht geliefert: alle anderen 6 Punkte, Spielleitung 0."] },
   { game: "Dingsbums", tagline: "Welche Variante stammt von der Spielleitung?",
     steps: ["Die Spielleitung erfasst vor dem Termin einen Satz mit dem Platzhalter „Dingsbums“, z. B. „Ich bin Fan von DINGSBUMS“, und ihre eigene Variante.", "Im Termin erscheint der Satz bei allen. Jede Person schickt geheim eine eigene Variante für Dingsbums.", "Die Spielleitung startet die Umfrage: Alle Varianten erscheinen gemischt und anonym.", "Alle raten, welche Variante von der Spielleitung stammt. Das Resultat ist erst nach dem Auflösen sichtbar."],
-    scoring: ["Wer die Spielleitung entlarvt, erhält 6 Punkte.", "Entlarvt niemand die Spielleitung, erhält sie 6 Punkte.", "Wessen Variante (ausser der Spielleitung) am meisten Stimmen erhält, bekommt zusätzlich 6 Punkte."] }
+    scoring: ["Wer die Spielleitung entlarvt, erhält 6 Punkte.", "Entlarvt niemand die Spielleitung, erhält sie 6 Punkte.", "Wessen Variante (ausser der Spielleitung) am meisten Stimmen erhält, bekommt ebenfalls 6 Punkte.", "Maximal 6 Punkte pro Person – auch wenn beides zutrifft."] }
 ];
 
 function renderRulesPage() {
@@ -1050,7 +1050,7 @@ function onDrawings(data) {
 function finishWith(points, details) {
   if (!isHost()) return;
   mutate(next => {
-    next.current.results = PEOPLE.map(person => ({ person, points: points[person] || 0, raw: points[person] || 0, detail: details[person] || "–" }))
+    next.current.results = PEOPLE.map(person => ({ person, points: Math.min(6, points[person] || 0), raw: points[person] || 0, detail: details[person] || "–" }))
       .sort((a, b) => b.points - a.points || a.person.localeCompare(b.person));
     next.current.endedAt = Date.now();
     next.current.phase = "results";
