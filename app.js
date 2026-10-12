@@ -966,7 +966,7 @@ const RULES = [
     steps: ["Jede Person bereitet ein kurzes Plädoyer vor, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt.", "Alle erfassen ihr Stichwort in der App. So wächst die Liste der Erfindungen.", "Bereits in früheren Sessions vorgestellte Erfindungen sind gesperrt.", "Nach allen Plädoyers startet die Spielleitung die geheime Abstimmung. Die eigene Erfindung kann nicht gewählt werden."],
     scoring: ["Wer die meisten Stimmen erhält, bekommt 6 Punkte. Bei Gleichstand erhalten alle Bestplatzierten 6 Punkte."] },
   { game: "Draw the Picture", tagline: "Beschreiben, nachmalen, vergleichen.",
-    steps: ["Die Spielleitung startet das Malen. Alle malen gleichzeitig im Browser – mit Stift, Füllen und Radierer.", "Die Spielleitung malt das Original und beschreibt dabei laut, was sie malt. Die anderen malen nur nach der Beschreibung nach.", "Ist die Spielleitung fertig, stoppt sie das Malen. Alle Bilder werden automatisch eingereicht.", "Die Spielleitung sieht alle Bilder neben ihrem Original und wählt das passendste. Danach stimmt die Gruppe ab: passt oder passt nicht."],
+    steps: ["Die Spielleitung startet das Malen. Alle malen gleichzeitig im Browser – mit Stift, Füllen und Radierer.", "Die Spielleitung malt das Original und beschreibt dabei laut, was sie malt. Die anderen malen nur nach der Beschreibung nach.", "Ist die Spielleitung fertig, stoppt sie das Malen. Alle Bilder werden automatisch eingereicht.", "Die Spielleitung sieht alle Bilder neben ihrem Original und wählt das passendste. Danach stimmen alle ab, die ein Bild eingereicht haben: passt oder passt nicht."],
     scoring: ["Passt (Mehrheit oder Gleichstand): Spielleitung und gewählte Person je 6 Punkte.", "Passt nicht (Mehrheit): Spielleitung 6 Punkte Abzug – schlecht beschrieben."] },
   { game: "Podcast", tagline: "Die Spielleitung liefert einen Podcast.",
     steps: ["Die ausgeloste Spielleitung produziert bis zum Termin einen Podcast.", "Im Termin erfasst sie in der App, ob der Podcast geliefert wurde."],
@@ -1316,14 +1316,16 @@ function renderPicture() {
       ${gameTop("DRAW THE PICTURE · VERGLEICH", "Welches Bild passt am besten?")}
       <div class="picture-ref"><span class="tag">Original von ${esc(host)}</span>${pictureOf(host) ? `<img src="${pictureOf(host)}" alt="Original">` : "<p>Original wird geladen …</p>"}</div>
       <div class="gallery">${submitted.map(person => `<figure class="gallery-item"><img src="${pictureOf(person)}" alt="Bild von ${esc(person)}"><figcaption>${esc(person)}${isHost() ? `<button class="button secondary small" type="button" data-action="picture-pick" data-person="${esc(person)}">Passt am besten</button>` : ""}</figcaption></figure>`).join("") || "<p>Noch keine Bilder eingetroffen …</p>"}</div>
-      <p class="canvas-note">${submitted.length} von ${others().length} Bildern eingereicht.</p>
+      <p class="canvas-note">${submitted.length} ${submitted.length === 1 ? "Bild" : "Bilder"} eingereicht.</p>
       ${isHost() ? "" : `<p class="rule-note">${esc(host)} wählt das Bild, das am besten passt.</p>`}
     </section>`;
     return;
   }
   // vote: Gruppe beurteilt die Wahl
   const pick = state.current.pick;
-  const verdict = state.current.verdict;
+  const voters = pictureVoters();
+  const canVote = voters.includes(currentUser);
+  const verdict = Object.fromEntries(Object.entries(state.current.verdict).filter(([person]) => voters.includes(person)));
   const mine = verdict[currentUser];
   const yes = Object.values(verdict).filter(value => value === "yes").length;
   const no = Object.values(verdict).filter(value => value === "no").length;
@@ -1331,15 +1333,21 @@ function renderPicture() {
     ${gameTop("DRAW THE PICTURE · URTEIL", "Passt das wirklich?")}
     <div class="compare"><figure><img src="${pictureOf(host)}" alt="Original"><figcaption>Original · ${esc(host)}</figcaption></figure><figure><img src="${pictureOf(pick)}" alt="Bild von ${esc(pick)}"><figcaption>Gewählt · ${esc(pick)}</figcaption></figure></div>
     <p class="rule-note">Gute Übereinstimmung: ${esc(host)} und ${esc(pick)} erhalten je 6 Punkte. Mehrheit sagt „passt nicht“: ${esc(host)} erhält 6 Punkte Abzug.</p>
-    ${isHost() ? "" : `<div class="button-row outcome-row"><button class="button ${mine === "yes" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="yes">👍 Passt</button><button class="button ${mine === "no" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="no">👎 Passt nicht</button></div>`}
-    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${yes + no} von ${others().length} Stimmen</h3></div>${isHost() ? `<button class="button primary" type="button" data-action="verdict-close">Abschliessen</button>` : ""}</div>
+    ${canVote ? `<div class="button-row outcome-row"><button class="button ${mine === "yes" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="yes">👍 Passt</button><button class="button ${mine === "no" ? "primary" : "secondary"} large" type="button" data-action="verdict" data-value="no">👎 Passt nicht</button></div>` : isHost() ? "" : `<p class="canvas-note">Abstimmen dürfen nur Personen, die ein Bild eingereicht haben.</p>`}
+    <div class="section-heading"><div><p class="eyebrow">STATUS</p><h3>${yes + no} von ${voters.length} Stimmen</h3><p class="canvas-note">Stimmberechtigt: ${voters.map(esc).join(", ") || "–"}</p></div>${isHost() ? `<button class="button primary" type="button" data-action="verdict-close">Abschliessen</button>` : ""}</div>
   </section>`;
+}
+
+// Stimmberechtigt: alle ausser Spielleitung, die ein Bild eingereicht haben
+function pictureVoters() {
+  return others().filter(person => pictureOf(person));
 }
 
 function closePicture() {
   const host = hostName();
   const pick = state.current.pick;
-  const values = Object.values(state.current.verdict);
+  const voters = pictureVoters();
+  const values = Object.entries(state.current.verdict).filter(([person]) => voters.includes(person)).map(([, value]) => value);
   const yes = values.filter(value => value === "yes").length;
   const no = values.filter(value => value === "no").length;
   const points = {}, details = {};
@@ -1521,7 +1529,7 @@ function handleCustomAction(action, event) {
   if (action === "pen-tool") { penTool = event.target.closest("[data-tool]").dataset.tool; document.querySelectorAll(".tool").forEach(tool => tool.classList.toggle("active", tool.dataset.tool === penTool)); }
   if (action === "canvas-undo" && canvasCtx && canvasEnabled() && undoStack.length) { canvasCtx.putImageData(undoStack.pop(), 0, 0); storeLocalCanvas(); }
   if (action === "picture-pick" && person) setPhase("vote", next => { next.current.pick = person; next.current.verdict = {}; });
-  if (action === "verdict" && !isHost() && state.current.phase === "vote") syncPatch({ current: { verdict: { [currentUser]: event.target.closest("[data-value]").dataset.value } } });
+  if (action === "verdict" && pictureVoters().includes(currentUser) && state.current.phase === "vote") syncPatch({ current: { verdict: { [currentUser]: event.target.closest("[data-value]").dataset.value } } });
   if (action === "verdict-close" && isHost()) closePicture();
   if (action === "pen-color") {
     penColor = event.target.closest("[data-color]").dataset.color;
