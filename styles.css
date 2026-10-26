@@ -348,3 +348,4 @@ td strong { white-space: nowrap; }
 .countdown-row { display: flex; align-items: center; gap: 14px; margin-top: 14px; color: var(--muted); font-weight: 700; }
 .countdown { padding: 6px 14px; border-radius: 12px; color: var(--ink); background: var(--orange-soft); font-size: 28px; font-variant-numeric: tabular-nums; }
 .countdown.urgent { color: white; background: var(--red, #d64545); }
+.duration-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; font-weight: 750; }
