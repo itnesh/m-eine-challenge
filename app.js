@@ -974,7 +974,7 @@ const RULES = [
     steps: ["Jede Person bereitet ein kurzes Plädoyer vor, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt.", "Die Spielleitung gibt die Erfassung frei. Danach erfassen alle ihr Stichwort in der App. So wächst die Liste der Erfindungen.", "Bereits in früheren Sessions vorgestellte Erfindungen sind gesperrt.", "Nach allen Plädoyers startet die Spielleitung die geheime Abstimmung. Die eigene Erfindung kann nicht gewählt werden."],
     scoring: ["Wer die meisten Stimmen erhält, bekommt 6 Punkte. Bei Gleichstand erhalten alle Bestplatzierten 6 Punkte."] },
   { game: "Draw the Picture", tagline: "Beschreiben, nachmalen, vergleichen.",
-    steps: ["Die Spielleitung startet das Malen. Alle malen gleichzeitig im Browser – mit Stift, Füllen und Radierer.", "Die Spielleitung malt das Original und beschreibt dabei laut, was sie malt. Die anderen malen nur nach der Beschreibung nach.", "Ist die Spielleitung fertig, stoppt sie das Malen. Alle Bilder werden automatisch eingereicht.", "Die Spielleitung sieht alle Bilder neben ihrem Original und wählt das passendste. Danach stimmen alle ab, die ein Bild eingereicht haben: passt oder passt nicht."],
+    steps: ["Im Warteraum kann jede Person auf einer Übungsfläche ausprobieren, wie das Malen funktioniert.", "Die Spielleitung startet das Malen. Alle malen gleichzeitig im Browser – mit Stift, Füllen und Radierer. Malzeit: 2 Minuten.", "Die Spielleitung malt das Original und beschreibt dabei laut, was sie malt. Die anderen malen nur nach der Beschreibung nach.", "Nach 2 Minuten (oder früher, wenn die Spielleitung stoppt) werden alle Bilder automatisch eingereicht.", "Die Spielleitung sieht alle Bilder neben ihrem Original und wählt das passendste. Danach stimmen alle ab, die ein Bild eingereicht haben: passt oder passt nicht."],
     scoring: ["Passt (Mehrheit oder Gleichstand): Spielleitung und gewählte Person je 6 Punkte.", "Passt nicht (Mehrheit): Spielleitung 6 Punkte Abzug – schlecht beschrieben."] },
   { game: "Podcast", tagline: "Die Spielleitung liefert einen Podcast.",
     steps: ["Die ausgeloste Spielleitung produziert bis zum Termin einen Podcast.", "Im Termin erfasst sie in der App, ob der Podcast geliefert wurde."],
@@ -1315,9 +1315,42 @@ function canvasHtml(note) {
   </div>`;
 }
 
-function canvasEnabled() {
-  return state.current.game === "Draw the Picture" && state.current.phase === "play";
+const DRAW_SECONDS = Number(new URLSearchParams(location.search).get("drawsec")) || 120;
+function drawSecondsLeft() {
+  if (!state.current.startedAt) return DRAW_SECONDS;
+  return Math.max(0, DRAW_SECONDS - Math.floor((Date.now() - state.current.startedAt) / 1000));
 }
+function isPractice() {
+  return state.current.game === "Draw the Picture" && state.current.phase === "lobby";
+}
+function canvasEnabled() {
+  if (state.current.game !== "Draw the Picture") return false;
+  if (state.current.phase === "lobby") return true; // Übungsfläche
+  return state.current.phase === "play" && drawSecondsLeft() > 0;
+}
+function formatCountdown(seconds) {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+// Countdown anzeigen, bei 0 sperren; Spielleitung stoppt automatisch
+let pictureTimerHandle = null;
+let autoStopRound = "";
+function tickPictureTimer() {
+  if (state.current.game !== "Draw the Picture" || state.current.phase !== "play") return;
+  const left = drawSecondsLeft();
+  const label = document.querySelector("[data-countdown]");
+  if (label) { label.textContent = formatCountdown(left); label.classList.toggle("urgent", left <= 15); }
+  if (left <= 0) {
+    pointerDown = false;
+    document.querySelector("#draw-canvas")?.classList.add("locked");
+    if (isHost() && autoStopRound !== state.current.id) {
+      autoStopRound = state.current.id;
+      submitDrawing();
+      setTimeout(() => setPhase("review", next => { next.current.endedAt = Date.now(); }), 300);
+      showToast("Zeit abgelaufen – Bilder werden eingesammelt");
+    }
+  }
+}
+pictureTimerHandle = setInterval(tickPictureTimer, 500);
 
 function pictureOf(person) {
   return state.current.drawings?.[person]?.image || "";
@@ -1330,16 +1363,20 @@ function renderPicture() {
     app.innerHTML = `<section class="panel game-shell">
       ${gameTop("DRAW THE PICTURE · WARTERAUM", "Malen nach Beschreibung")}
       <p class="rule-note">${esc(host)} malt live ein Bild und beschreibt dabei laut, was entsteht. Alle anderen malen gleichzeitig nach – nur nach der Beschreibung, ohne das Original zu sehen. Danach wählt ${esc(host)}, welches Bild am besten passt.</p>
+      <p class="rule-note">Malzeit: ${formatCountdown(DRAW_SECONDS)} Min. Danach werden alle Bilder automatisch eingesammelt.</p>
       <div class="section-heading"><div><h3>${activePeople().length} von ${PEOPLE.length} eingeloggt</h3></div></div>
       ${renderPeopleGrid(activePeople())}
-      <div class="section-heading"><div><p class="eyebrow">START</p><h2>${isHost() ? "Alle bereit?" : `Warte auf ${esc(host)}`}</h2></div>${isHost() ? `<button class="button primary large" type="button" data-action="picture-start">Malen starten</button>` : ""}</div>
+      <div class="section-heading"><div><p class="eyebrow">ÜBEN</p><h2>Übungsfläche</h2></div><p>Probier Stift, Füllen, Radierer und Farben aus. Die Übung wird nicht gespeichert und beim Start geleert.</p></div>
+      ${canvasHtml("Übungsmodus – nur für dich sichtbar.")}
+      <div class="section-heading"><div><p class="eyebrow">START</p><h2>${isHost() ? "Alle bereit?" : `Warte auf ${esc(host)}`}</h2></div>${isHost() ? `<button class="button primary large" type="button" data-action="picture-start">Malen starten (${formatCountdown(DRAW_SECONDS)} Min.)</button>` : ""}</div>
     </section>`;
     return;
   }
   if (phase === "play") {
     app.innerHTML = `<section class="panel game-shell">
       ${gameTop("DRAW THE PICTURE · MALEN", isHost() ? "Male und beschreibe laut" : `Hör ${esc(host)} zu und male nach`)}
-      ${canvasHtml(isHost() ? "Dein Bild ist das Original. Beschreibe laut, was du malst. Wenn du fertig bist: stoppen." : "Male nach der Beschreibung. Beim Stoppen durch die Spielleitung wird dein Bild automatisch eingereicht.")}
+      <div class="countdown-row"><span>Verbleibende Zeit</span><strong class="countdown ${drawSecondsLeft() <= 15 ? "urgent" : ""}" data-countdown>${formatCountdown(drawSecondsLeft())}</strong></div>
+      ${canvasHtml(isHost() ? "Dein Bild ist das Original. Beschreibe laut, was du malst. Nach ${formatCountdown(DRAW_SECONDS)} Min. wird automatisch gestoppt – oder du stoppst früher." : "Male nach der Beschreibung. Nach Ablauf der Zeit oder beim Stoppen durch die Spielleitung wird dein Bild automatisch eingereicht.")}
       ${isHost() ? `<div class="review-footer"><span>Alle Bilder werden beim Stoppen eingesammelt.</span><button class="button primary large" type="button" data-action="picture-stop">Fertig – Malen stoppen</button></div>` : ""}
     </section>`;
     return;
@@ -1396,6 +1433,8 @@ function closePicture() {
 
 let canvasCtx = null;
 let undoStack = [];
+let canvasMode = "";
+let practiceDataUrl = "";
 function mountCanvas() {
   const canvas = document.querySelector("#draw-canvas");
   canvasCtx = null;
@@ -1404,11 +1443,14 @@ function mountCanvas() {
   canvasCtx = ctx;
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const mode = isPractice() ? "practice" : "round";
+  if (mode !== canvasMode) { canvasMode = mode; undoStack = []; }
   if (localDrawing.roundId !== state.current.id) { localDrawing = { roundId: state.current.id, dataUrl: "" }; undoStack = []; }
-  if (localDrawing.dataUrl) {
+  const restore = mode === "practice" ? practiceDataUrl : localDrawing.dataUrl;
+  if (restore) {
     const image = new Image();
     image.onload = () => ctx.drawImage(image, 0, 0, CANVAS_W, CANVAS_H);
-    image.src = localDrawing.dataUrl;
+    image.src = restore;
   }
   canvas.classList.toggle("locked", !canvasEnabled());
   let last = null;
@@ -1494,6 +1536,7 @@ function floodFill(ctx, x, y, hex) {
 function storeLocalCanvas() {
   const canvas = document.querySelector("#draw-canvas");
   if (!canvas) return;
+  if (isPractice()) { practiceDataUrl = canvas.toDataURL("image/jpeg", 0.6); return; }
   localDrawing = { roundId: state.current.id, dataUrl: canvas.toDataURL("image/jpeg", 0.6) };
 }
 
@@ -1559,7 +1602,8 @@ function handleCustomAction(action, event) {
   });
   if (action === "vote-dings" && person && person !== currentUser && dingsVoters().includes(currentUser) && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
   if (action === "dings-close" && isHost()) closeDingsbums();
-  if (action === "picture-start") setPhase("play", next => { next.current.drawings = {}; next.current.pick = null; next.current.verdict = {}; });
+  if (action === "picture-start") setPhase("play", next => {
+    next.current.startedAt = Date.now(); next.current.drawings = {}; next.current.pick = null; next.current.verdict = {}; });
   if (action === "picture-stop" && isHost()) { submitDrawing(); setTimeout(() => setPhase("review", next => { next.current.endedAt = Date.now(); }), 300); }
   if (action === "pen-tool") { penTool = event.target.closest("[data-tool]").dataset.tool; document.querySelectorAll(".tool").forEach(tool => tool.classList.toggle("active", tool.dataset.tool === penTool)); }
   if (action === "canvas-undo" && canvasCtx && canvasEnabled() && undoStack.length) { canvasCtx.putImageData(undoStack.pop(), 0, 0); storeLocalCanvas(); }
