@@ -1,7 +1,7 @@
 import { createStore } from "./store.js";
 
 const PEOPLE = ["Ueli", "Pirmin", "Eric", "Terry", "Markus", "Sinthu", "Matthias", "Gui", "Fabio", "Elias"];
-const GAMES = ["ABCD-Jagd", "Stadt–Land–Fluss", "Stiller Held", "Live-Cooking", "Dümmste Erfindung", "Draw the Picture", "Podcast", "Dingsbums"];
+const GAMES = ["ABCD-Jagd", "Stadt–Land–Fluss", "Stiller Held", "Dümmste Erfindung", "Draw the Picture", "Podcast", "Dingsbums"];
 const CUSTOM_GAMES = ["Live-Cooking", "Dümmste Erfindung", "Draw the Picture", "Podcast", "Dingsbums"];
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVW".split("");
 const SESSION_KEY = "m-eine-challenge-user-v5";
@@ -341,6 +341,7 @@ function render() {
   if (activeView === "leaderboard") renderLeaderboardPage();
   else if (activeView === "history") renderHistoryPage();
   else if (activeView === "rules") renderRulesPage();
+  else if (activeView === "events") renderEventsPage();
   else if (inGame) renderGame();
   else renderHome();
   startVisibleTimer();
@@ -967,9 +968,6 @@ const RULES = [
   { game: "Stiller Held", tagline: "Wer hat diese Woche im Hintergrund am meisten bewegt?",
     steps: ["Die Spielleitung eröffnet die Abstimmung.", "Jede Person gibt geheim genau eine Stimme ab – auch für sich selbst, wenn sie will.", "Die Stimme kann bis zum Abschluss geändert werden.", "Die Spielleitung schliesst die Abstimmung."],
     scoring: ["Die Person mit den meisten Stimmen erhält 6 Punkte, alle anderen 0.", "Bei Gleichstand entscheidet die Spielleitung zwischen den Bestplatzierten."] },
-  { game: "Live-Cooking", tagline: "Wer es zieht, kocht nächste Woche für alle.",
-    steps: ["Die ausgeloste Spielleitung bereitet für die nächste Woche ein Live-Cooking vor.", "Sie teilt mit, was eingekauft werden muss. Alle anderen kaufen ein.", "Im Termin wird gemeinsam gekocht.", "Die Spielleitung erfasst in der App, ob das Cooking stattgefunden hat und wer mitgekocht hat."],
-    scoring: ["Durchgeführt: Spielleitung 6 Punkte, alle Teilnehmenden 3 Punkte.", "Nicht durchgeführt (verhängt): alle anderen 6 Punkte, Spielleitung 0."] },
   { game: "Dümmste Erfindung", tagline: "Das beste Plädoyer für die sinnloseste Erfindung.",
     steps: ["Jede Person bereitet ein kurzes Plädoyer vor, warum ihre Erfindung die dümmste ist. Hilfsmittel (Video, PPTX …) sind erlaubt.", "Die Spielleitung gibt die Erfassung frei. Danach erfassen alle ihr Stichwort in der App. So wächst die Liste der Erfindungen.", "Bereits in früheren Sessions vorgestellte Erfindungen sind gesperrt.", "Nach allen Plädoyers startet die Spielleitung die geheime Abstimmung. Die eigene Erfindung kann nicht gewählt werden."],
     scoring: ["Wer die meisten Stimmen erhält, bekommt 6 Punkte. Bei Gleichstand erhalten alle Bestplatzierten 6 Punkte."] },
@@ -992,6 +990,15 @@ function renderRulesPage() {
         <summary><span class="rules-title">${esc(rule.game)}${rule.game === state.current.game ? `<span class="rules-badge">Diese Woche</span>` : ""}</span><span class="rules-tagline">${esc(rule.tagline)}</span></summary>
         <div class="rules-body"><div><h3>Ablauf</h3>${list(rule.steps)}</div><div><h3>Punkte</h3>${list(rule.scoring)}</div></div>
       </details>`).join("")}
+      <details class="rules-item">
+        <summary><span class="rules-title">Live-Cooking & Teamevent</span><span class="rules-tagline">Jahrespflicht – sonst gibt's Glühwein</span></summary>
+        <div class="rules-body"><div>${list([
+          "Alle Mitglieder (ausser Pirmin) organisieren pro Jahr (November bis Oktober) je 1 Live-Cooking und 1 Teamevent.",
+          "Termine werden unter „Events“ gebucht: pro Monat maximal 1 Live-Cooking und 1 Teamevent.",
+          "Nach dem Event hakt eine andere Person es als durchgeführt ab – nie die organisierende Person selbst.",
+          "Ende Oktober wird abgerechnet: pro nicht durchgeführtem Event bezahlt die Person am Weihnachtsmarkt eine Runde Glühwein für alle."
+        ])}</div></div>
+      </details>
       <details class="rules-item">
         <summary><span class="rules-title">Wochenablauf</span><span class="rules-tagline">Login, Spielleitung, Ranglisten und Auslosung</span></summary>
         <div class="rules-body"><div>${list([
@@ -1699,6 +1706,177 @@ function checkIdle() {
 checkIdle();
 if (currentUser && !safeGet(userStorage, IDLE_KEY)) touchActivity();
 setInterval(checkIdle, 30000);
+
+// ===================== Events: Live-Cooking & Teamevent =====================
+// Speicherung unter members.__events (zulässiges Feld gemäss Firestore Rules)
+const EVENT_MEMBERS = PEOPLE.filter(person => person !== "Pirmin");
+const EVENT_TYPES = { cooking: "Live-Cooking", teamevent: "Teamevent" };
+const TRACKING_START = "2026-11-01";
+const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+let bookingSlot = "";
+
+function allEvents() {
+  const raw = state.members?.__events || {};
+  return Object.values(raw).filter(event => event && event.id && event.status !== "deleted");
+}
+
+// Periode: 1. November bis 31. Oktober
+function periodStartYear(dateString = today()) {
+  const [year, month] = dateString.split("-").map(Number);
+  return month >= 11 ? year : year - 1;
+}
+function periodMonths(startYear) {
+  return Array.from({ length: 12 }, (_, index) => {
+    const month = ((10 + index) % 12) + 1;
+    const year = month >= 11 ? startYear : startYear + 1;
+    return { year, month, key: `${year}-${String(month).padStart(2, "0")}` };
+  });
+}
+function periodLabel(startYear) {
+  return `Nov ${String(startYear).slice(-2)} – Okt ${String(startYear + 1).slice(-2)}`;
+}
+function eventsInPeriod(startYear) {
+  const from = `${startYear}-11-01`, to = `${startYear + 1}-10-31`;
+  return allEvents().filter(event => event.date >= from && event.date <= to);
+}
+function eventFor(monthKey, type) {
+  return allEvents().find(event => event.type === type && event.date.slice(0, 7) === monthKey);
+}
+function ownEvent(person, type, startYear) {
+  return eventsInPeriod(startYear).find(event => event.owner === person && event.type === type);
+}
+function formatShortDate(value) {
+  const [year, month, day] = value.split("-");
+  return `${Number(day)}.${Number(month)}.${year.slice(-2)}`;
+}
+
+// Glühwein-Bilanz pro Person und Periode
+function eventBalance(startYear) {
+  const events = eventsInPeriod(startYear);
+  return EVENT_MEMBERS.map(person => {
+    const status = {};
+    Object.keys(EVENT_TYPES).forEach(type => {
+      const event = events.find(item => item.owner === person && item.type === type);
+      status[type] = event ? (event.status === "done" ? "done" : "planned") : "open";
+    });
+    const missing = Object.values(status).filter(value => value !== "done").length;
+    return { person, status, missing };
+  });
+}
+
+function statusBadge(value) {
+  return ({ done: `<span class="ev-badge done">✓ durchgeführt</span>`, planned: `<span class="ev-badge planned">geplant</span>`, open: `<span class="ev-badge open">offen</span>` })[value];
+}
+
+function renderEventCell(month, type) {
+  const event = eventFor(month.key, type);
+  const label = EVENT_TYPES[type];
+  const slot = `${month.key}|${type}`;
+  const startYear = periodStartYear(`${month.key}-01`);
+  if (event) {
+    const mine = event.owner === currentUser;
+    const due = event.date <= today();
+    return `<div class="ev-cell booked ${event.status}">
+      <div class="ev-head"><strong>${esc(event.owner)}</strong>${event.status === "done" ? `<span class="ev-badge done">✓</span>` : ""}</div>
+      <div class="ev-date">${formatShortDate(event.date)}${event.title ? ` · ${esc(event.title)}` : ""}</div>
+      ${event.status === "done" ? `<div class="ev-meta">abgehakt von ${esc(event.doneBy)}</div>` : `
+        <div class="ev-actions">
+          ${!mine && due ? `<button class="button secondary small" type="button" data-action="event-done" data-id="${event.id}">✓ Durchgeführt</button>` : ""}
+          ${!mine && !due ? `<span class="ev-meta">abhaken ab ${formatShortDate(event.date)}</span>` : ""}
+          ${mine ? `<span class="ev-meta">Abhaken durch andere</span><button class="button ghost small" type="button" data-action="event-delete" data-id="${event.id}">Löschen</button>` : ""}
+        </div>`}
+    </div>`;
+  }
+  const past = month.key < today().slice(0, 7);
+  const canBook = EVENT_MEMBERS.includes(currentUser) && !past && !ownEvent(currentUser, type, startYear);
+  if (bookingSlot === slot && canBook) {
+    const first = `${month.key}-01`;
+    const last = `${month.key}-${String(new Date(month.year, month.month, 0).getDate()).padStart(2, "0")}`;
+    const min = first < today() ? today() : first;
+    return `<form class="ev-cell ev-form" data-form="event-book" data-type="${type}">
+      <label>Datum<input type="date" name="date" min="${min}" max="${last}" value="${min}" required data-keep-focus></label>
+      <label>Was / Wo (optional)<input name="title" maxlength="60" placeholder="${type === "cooking" ? "z. B. Risotto" : "z. B. Bowling"}" data-keep-focus></label>
+      <div class="ev-actions"><button class="button primary small" type="submit">${label} buchen</button><button class="button ghost small" type="button" data-action="event-cancel-form">Abbrechen</button></div>
+    </form>`;
+  }
+  return `<div class="ev-cell free">${past ? `<span class="ev-meta">–</span>` : canBook ? `<button class="button ghost small" type="button" data-action="event-open-form" data-slot="${slot}">+ ${label} buchen</button>` : `<span class="ev-meta">frei</span>`}</div>`;
+}
+
+function renderEventsPage() {
+  const startYear = Math.max(periodStartYear(), periodStartYear(TRACKING_START));
+  const months = periodMonths(startYear);
+  const balance = eventBalance(startYear);
+  const prevYear = startYear - 1;
+  const showPrev = `${prevYear}-11-01` >= TRACKING_START;
+  const prevBalance = showPrev ? eventBalance(prevYear).filter(item => item.missing > 0) : [];
+  const mine = EVENT_MEMBERS.includes(currentUser) ? balance.find(item => item.person === currentUser) : null;
+  app.innerHTML = `<section>
+    <p class="eyebrow">EVENTS · ${periodLabel(startYear)}</p><h1>Live-Cooking & Teamevent</h1>
+    <p class="lead">Jedes Mitglied organisiert pro Jahr 1 Live-Cooking und 1 Teamevent. Pro Monat ist je 1 Termin möglich. Was Ende Oktober nicht durchgeführt ist, kostet am Weihnachtsmarkt eine Runde Glühwein. 🍷</p>
+    ${mine ? `<div class="ev-mine">Dein Stand: Live-Cooking ${statusBadge(mine.status.cooking)} · Teamevent ${statusBadge(mine.status.teamevent)}${mine.missing ? ` · aktuell ${mine.missing} ${mine.missing === 1 ? "Runde" : "Runden"} Glühwein offen` : " · alles erledigt 🎉"}</div>` : ""}
+    ${showPrev && prevBalance.length ? `<div class="ev-prev"><strong>Glühwein-Runden aus ${periodLabel(prevYear)}:</strong> ${prevBalance.map(item => `${esc(item.person)} ${item.missing}×`).join(" · ")}</div>` : ""}
+    <div class="section-heading"><div><p class="eyebrow">KALENDER</p><h2>Termine buchen</h2></div><p>Buchen kann jedes Mitglied für sich selbst. Abhaken darf nur jemand anderes – ab dem Event-Datum.</p></div>
+    <div class="ev-table">
+      <div class="ev-row ev-header"><span>Monat</span><span>🍳 Live-Cooking</span><span>🎳 Teamevent</span></div>
+      ${months.map(month => `<div class="ev-row ${month.key === today().slice(0, 7) ? "current" : ""}"><span class="ev-month">${MONTHS[month.month - 1]} ${month.year}</span>${renderEventCell(month, "cooking")}${renderEventCell(month, "teamevent")}</div>`).join("")}
+    </div>
+    <div class="section-heading"><div><p class="eyebrow">BILANZ</p><h2>Wer zahlt Glühwein?</h2></div><p>Stand heute. Abrechnung Ende Oktober, bezahlt wird am Weihnachtsmarkt.</p></div>
+    <div class="ev-balance">
+      <div class="ev-brow ev-header"><span>Person</span><span>Live-Cooking</span><span>Teamevent</span><span>Glühwein</span></div>
+      ${balance.sort((a, b) => b.missing - a.missing || a.person.localeCompare(b.person)).map(item => `<div class="ev-brow"><strong>${esc(item.person)}</strong>${statusBadge(item.status.cooking)}${statusBadge(item.status.teamevent)}<span class="ev-wine">${item.missing ? "🍷".repeat(item.missing) : "–"}</span></div>`).join("")}
+    </div>
+  </section>`;
+}
+
+function bookEvent(type, date, title) {
+  if (!EVENT_MEMBERS.includes(currentUser) || !EVENT_TYPES[type]) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < today()) return showToast("Bitte ein Datum ab heute wählen");
+  const id = `ev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const startYear = periodStartYear(date);
+  let problem = "";
+  store.transact(raw => {
+    const members = raw.members || (raw.members = {});
+    const events = members.__events || (members.__events = {});
+    const list = Object.values(events).filter(event => event && event.status !== "deleted");
+    if (list.some(event => event.type === type && event.date.slice(0, 7) === date.slice(0, 7))) { problem = "Dieser Monat ist bereits belegt"; return false; }
+    const from = `${startYear}-11-01`, to = `${startYear + 1}-10-31`;
+    if (list.some(event => event.owner === currentUser && event.type === type && event.date >= from && event.date <= to)) { problem = `Du hast in dieser Periode schon ein ${EVENT_TYPES[type]}`; return false; }
+    events[id] = { id, type, owner: currentUser, date, title: title.slice(0, 60), status: "planned", createdAt: Date.now() };
+  }).then(() => {
+    if (problem) return showToast(problem);
+    bookingSlot = "";
+    showToast(`${EVENT_TYPES[type]} am ${formatShortDate(date)} gebucht`);
+  }).catch(reportWriteError);
+}
+
+function markEventDone(id) {
+  const event = allEvents().find(item => item.id === id);
+  if (!event || event.owner === currentUser || event.date > today()) return;
+  syncPatch({ members: { __events: { [id]: { status: "done", doneBy: currentUser, doneAt: Date.now() } } } });
+}
+
+function deleteEvent(id) {
+  const event = allEvents().find(item => item.id === id);
+  if (!event || event.owner !== currentUser || event.status === "done") return;
+  syncPatch({ members: { __events: { [id]: { status: "deleted" } } } });
+  showToast("Termin gelöscht");
+}
+
+app.addEventListener("click", event => {
+  const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "event-open-form") { bookingSlot = event.target.closest("[data-slot]").dataset.slot; render(); }
+  if (action === "event-cancel-form") { bookingSlot = ""; render(); }
+  if (action === "event-done") markEventDone(event.target.closest("[data-id]").dataset.id);
+  if (action === "event-delete") deleteEvent(event.target.closest("[data-id]").dataset.id);
+});
+
+app.addEventListener("submit", event => {
+  const form = event.target.closest("[data-form='event-book']");
+  if (!form) return;
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(form));
+  bookEvent(form.dataset.type, data.date, (data.title || "").trim());
+});
 
 render();
 connect();
