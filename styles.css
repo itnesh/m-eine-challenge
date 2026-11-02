@@ -382,3 +382,8 @@ td strong { white-space: nowrap; }
 }
 .ev-brow .ev-badge { justify-self: start; }
 @media (max-width: 650px) { .nav { overflow-x: auto; max-width: 100%; } .nav-link { padding: 8px 9px; font-size: 13px; } }
+.ev-total { display: flex; align-items: center; gap: 14px; margin-top: 16px; padding: 16px 20px; border-radius: 16px; color: white; background: #7a1f2b; box-shadow: var(--shadow); }
+.ev-total-icon { font-size: 40px !important; line-height: 1; opacity: 1 !important; }
+.ev-total strong { display: block; font-size: 24px; letter-spacing: -.02em; }
+.ev-total span { opacity: .85; font-size: 14px; }
+.ev-wine b { margin-left: 4px; font-size: 14px; }

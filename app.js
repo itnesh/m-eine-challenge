@@ -1821,9 +1821,10 @@ function renderEventsPage() {
       ${months.map(month => `<div class="ev-row ${month.key === today().slice(0, 7) ? "current" : ""}"><span class="ev-month">${MONTHS[month.month - 1]} ${month.year}</span>${renderEventCell(month, "cooking")}${renderEventCell(month, "teamevent")}</div>`).join("")}
     </div>
     <div class="section-heading"><div><p class="eyebrow">BILANZ</p><h2>Wer zahlt Glühwein?</h2></div><p>Stand heute. Abrechnung Ende Oktober, bezahlt wird am Weihnachtsmarkt.</p></div>
+    <div class="ev-total"><span class="ev-total-icon">🍷</span><div><strong>${balance.reduce((sum, item) => sum + item.missing, 0)} Runden Glühwein</strong><span>aktuell offen · ${balance.filter(item => item.missing).length} von ${balance.length} Personen</span></div></div>
     <div class="ev-balance">
       <div class="ev-brow ev-header"><span>Person</span><span>Live-Cooking</span><span>Teamevent</span><span>Glühwein</span></div>
-      ${balance.sort((a, b) => b.missing - a.missing || a.person.localeCompare(b.person)).map(item => `<div class="ev-brow"><strong>${esc(item.person)}</strong>${statusBadge(item.status.cooking)}${statusBadge(item.status.teamevent)}<span class="ev-wine">${item.missing ? "🍷".repeat(item.missing) : "–"}</span></div>`).join("")}
+      ${balance.sort((a, b) => b.missing - a.missing || a.person.localeCompare(b.person)).map(item => `<div class="ev-brow"><strong>${esc(item.person)}</strong>${statusBadge(item.status.cooking)}${statusBadge(item.status.teamevent)}<span class="ev-wine">${item.missing ? `${"🍷".repeat(item.missing)} <b>${item.missing}×</b>` : "–"}</span></div>`).join("")}
     </div>
   </section>`;
 }
