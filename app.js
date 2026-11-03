@@ -151,6 +151,7 @@ function onRemoteState(data) {
   const typing = document.activeElement?.matches("[data-term-cat],[data-abcd-term],#new-category,[data-keep-focus]");
   const drawingNow = state.current.game === "Draw the Picture" && state.current.phase === "play" && document.querySelector("#draw-canvas");
   if ((typing || canvasBusy() || drawingNow) && renderKey() === lastRenderedKey) return;
+  if (Date.now() < wheelBusyUntil && renderKey() === lastRenderedKey) { clearTimeout(wheelRenderTimer); wheelRenderTimer = setTimeout(render, wheelBusyUntil - Date.now() + 50); return; }
   render();
 }
 
@@ -346,6 +347,7 @@ function render() {
   else renderHome();
   startVisibleTimer();
   mountCanvas();
+  mountWheels();
 }
 
 function renderHome() {
@@ -916,27 +918,27 @@ function renderDraw() {
   app.innerHTML = `${shareHint()}<section>
     <div class="section-heading"><div><p class="eyebrow">KOMMENDE WOCHE</p><h1>Das Rad entscheidet</h1></div><p>Spiel und Spielleitung werden separat gezogen. Das aktuelle Spiel und die aktuelle Leitung pausieren eine Woche.</p></div>
     <div class="draw-grid">
-      <article class="panel draw-card"><h3>Welches Spiel?</h3><div class="wheel" id="game-wheel"><span>${draw.game ? esc(draw.game.charAt(0)) : "?"}</span></div><p class="draw-result">${esc(draw.game || "Noch nicht ausgelost")}</p><p class="draw-options">Zur Auswahl: ${gameChoices.map(esc).join(" · ")}</p>${isHost() ? `<button class="button secondary" type="button" data-action="draw-game">Spiel auslosen</button>` : ""}</article>
-      <article class="panel draw-card"><h3>Wer leitet?</h3><div class="wheel" id="host-wheel"><span>${draw.host ? esc(draw.host.charAt(0)) : "?"}</span></div><p class="draw-result">${esc(draw.host || "Noch nicht ausgelost")}</p>${isHost() ? `<button class="button secondary" type="button" data-action="draw-host">Spielleitung auslosen</button>` : ""}</article>
+      <article class="panel draw-card"><h3>Welches Spiel?</h3>${wheelHtml("game", draw.gameOptions || gameChoices)}<p class="draw-result" data-wheel-result="game">${esc(draw.game || "Noch nicht ausgelost")}</p><p class="draw-options">Zur Auswahl: ${gameChoices.map(esc).join(" · ")}</p>${isHost() ? `<button class="button secondary" type="button" data-action="draw-game">Spiel auslosen</button>` : ""}</article>
+      <article class="panel draw-card"><h3>Wer leitet?</h3>${wheelHtml("host", draw.hostOptions || hostPool)}<p class="draw-result" data-wheel-result="host">${esc(draw.host || "Noch nicht ausgelost")}</p>${isHost() ? `<button class="button secondary" type="button" data-action="draw-host">Spielleitung auslosen</button>` : ""}</article>
     </div>
     ${isHost() ? `<section class="panel host-pool"><p class="eyebrow">ANWESENHEIT NÄCHSTE WOCHE</p><h3>Wer darf ausgelost werden?</h3><p>Ferien oder Abwesenheiten einfach abwählen.</p><div class="host-pool-grid">${PEOPLE.filter(person => person !== state.current.host).map(person => `<label><input type="checkbox" data-next-host="${esc(person)}" ${hostPool.includes(person) ? "checked" : ""}><span class="avatar">${initials(person)}</span>${esc(person)}</label>`).join("")}</div></section><div class="button-row"><button class="button primary large" type="button" data-action="save-next-week" ${draw.game && draw.host && draw.game !== state.current.game ? "" : "disabled"}>Nächste Woche festlegen</button></div>` : `<p class="rule-note">${esc(state.current.host)} dreht die beiden Räder.</p>`}
   </section>`;
 }
 
 function drawNext(type) {
-  if (!isHost()) return;
-  const wheel = document.querySelector(`#${type === "game" ? "game" : "host"}-wheel`);
-  wheel?.classList.add("spin");
-  setTimeout(() => mutate(next => {
+  if (!isHost() || Date.now() < wheelBusyUntil) return;
+  mutate(next => {
     const choices = type === "game"
       ? GAMES.filter(game => game !== next.current.game)
       : (Array.isArray(next.current.draw.hostPool) ? next.current.draw.hostPool : PEOPLE.filter(person => person !== next.current.host));
     if (!choices.length) {
       showToast("Bitte mindestens eine Person auswählen");
-      return;
+      return false;
     }
     next.current.draw[type] = randomItem(choices);
-  }), 850);
+    next.current.draw[`${type}Options`] = choices;
+    next.current.draw[`${type}SpinAt`] = Date.now();
+  });
 }
 
 function saveNextWeek() {
@@ -944,7 +946,9 @@ function saveNextWeek() {
   inGame = false;
   mutate(next => {
     const old = next.current;
-    next.history.unshift({ id: old.id, date: today(), game: old.game, host: old.host, scores: old.results, nextGame: old.draw.game, nextHost: old.draw.host, ...(old.inventions ? { inventions: old.inventions } : {}) });
+    next.history.unshift({ id: old.id, date: today(), game: old.game, host: old.host, scores: old.results, nextGame: old.draw.game, nextHost: old.draw.host, ...(old.inventions ? { inventions: old.inventions } : {}),
+      ...(old.game === "Dingsbums" ? { sentence: old.secret?.sentence || "", hostVariant: old.secret?.variant || "", variants: old.entries || {}, votes: old.votes || {} } : {}),
+      ...(["Stiller Held", "Dümmste Erfindung", "Draw the Picture"].includes(old.game) ? { votes: old.votes || {}, entries: old.entries || {}, pick: old.pick || null, verdict: old.verdict || {} } : {}) });
     next.current = {
       id: `week-${Date.now()}`, date: today(), game: old.draw.game, host: old.draw.host, phase: "lobby", letters: [], letter: null,
       categories: ["Stadt", "Land", "Fluss"], startedAt: null, endedAt: null, finisher: null, drafts: {}, reviews: {}, votes: {}, tieCandidates: [], results: null, draw: { game:null, host:null }
@@ -1018,7 +1022,8 @@ function renderHistoryPage() {
   app.innerHTML = `<section><p class="eyebrow">ARCHIV</p><h1>Vergangene Wochen</h1><p class="lead">Spiele, Spielleitungen und Resultate bleiben erhalten.</p><div class="history-list">${state.history.length ? state.history.map(week => `
     <article class="history-card"><div class="history-top"><div><p class="eyebrow">${esc(week.game)}</p><h3>Spielleitung: ${esc(week.host)}</h3></div><span class="history-date">${formatDate(week.date)}</span></div>
     <div class="history-tags"><span class="tag">Danach: ${esc(week.nextGame)}</span><span class="tag">Nächste Leitung: ${esc(week.nextHost)}</span></div>
-    <div>${(week.scores || []).slice(0,3).map(score => `<span class="tag">${esc(score.person)} ${score.points} Pkt.</span>`).join(" ")}</div></article>`).join("") : `<div class="empty-state"><strong>Noch keine abgeschlossene Woche.</strong><br>Nach der ersten Auslosung erscheint hier die Geschichte.</div>`}</div></section>`;
+    ${week.sentence ? `<p class="history-extra">„${esc(week.sentence)}“ · Variante Spielleitung: <strong>${esc(week.hostVariant)}</strong></p>` : ""}
+    <div class="history-scores">${(week.scores || []).length ? [...week.scores].sort((a, b) => b.points - a.points || a.person.localeCompare(b.person)).map(score => `<div class="history-score ${score.points > 0 ? "plus" : score.points < 0 ? "minus" : ""}"><strong>${esc(score.person)}</strong><span>${score.points} Pkt.</span>${score.detail && score.detail !== "nachgetragen" ? `<small>${esc(score.detail)}</small>` : ""}</div>`).join("") : `<span class="tag">keine Punkte erfasst</span>`}</div></article>`).join("") : `<div class="empty-state"><strong>Noch keine abgeschlossene Woche.</strong><br>Nach der ersten Auslosung erscheint hier die Geschichte.</div>`}</div></section>`;
 }
 
 function startVisibleTimer() {
@@ -1222,6 +1227,11 @@ function closeInvention() {
 }
 
 // ---------- Dingsbums ----------
+// Spieler, deren Variante identisch mit der der Spielleitung ist (gelten als entlarvt)
+function sameAsHost(current = state.current) {
+  const target = normalizedTerm(current.secret?.variant);
+  return PEOPLE.filter(person => person !== current.host && target && normalizedTerm(current.entries?.[person]) === target);
+}
 // Teilnehmende: alle ausser Spielleitung, die eine Variante abgegeben haben
 function dingsVoters() {
   return others().filter(person => state.current.entries[person]);
@@ -1290,8 +1300,10 @@ function closeDingsbums() {
   PEOPLE.forEach(person => { points[person] = 0; details[person] = []; });
   const allowed = dingsVoters();
   Object.keys(votes).forEach(person => { if (!allowed.includes(person)) delete votes[person]; });
-  const hunters = allowed.filter(person => votes[person] === host);
-  hunters.forEach(person => { points[person] += 6; details[person].push("Spielleitung entlarvt"); });
+  const twins = sameAsHost();
+  twins.forEach(person => { points[person] += 6; details[person].push("gleiche Variante wie Spielleitung = entlarvt"); });
+  const hunters = [...new Set([...twins, ...allowed.filter(person => votes[person] === host)])];
+  allowed.filter(person => votes[person] === host && !twins.includes(person)).forEach(person => { points[person] += 6; details[person].push("Spielleitung entlarvt"); });
   if (!hunters.length) { points[host] += 6; details[host].push("niemand hat dich entlarvt"); }
   const received = {};
   Object.values(votes).forEach(person => { if (person !== host) received[person] = (received[person] || 0) + 1; });
@@ -1300,7 +1312,7 @@ function closeDingsbums() {
     if (count === max) { points[person] += 6; details[person].push(`beste Variante (${count} ${count === 1 ? "Stimme" : "Stimmen"})`); }
   });
   const flat = {};
-  PEOPLE.forEach(person => { flat[person] = details[person].join(" · ") || (state.current.entries[person] ? esc(state.current.entries[person]) : "–"); });
+  PEOPLE.forEach(person => { flat[person] = [state.current.entries[person] ? `„${state.current.entries[person]}“` : "", ...details[person]].filter(Boolean).join(" · ") || "–"; });
   flat[host] = [...details[host], `Variante: ${state.current.secret.variant}`].join(" · ");
   finishWith(points, flat, [host, ...dingsVoters()]);
 }
@@ -1611,7 +1623,8 @@ function handleCustomAction(action, event) {
   if (action === "dings-start") setPhase("play", next => { next.current.entries = {}; });
   if (action === "dings-vote") setPhase("vote", next => {
     next.current.votes = {};
-    next.current.order = shuffle([next.current.host, ...PEOPLE.filter(name => name !== next.current.host && next.current.entries[name])]);
+    const twins = sameAsHost(next.current);
+    next.current.order = shuffle([next.current.host, ...PEOPLE.filter(name => name !== next.current.host && next.current.entries[name] && !twins.includes(name))]);
   });
   if (action === "vote-dings" && person && person !== currentUser && dingsVoters().includes(currentUser) && state.current.phase === "vote") syncPatch({ current: { votes: { [currentUser]: person } } });
   if (action === "dings-close" && isHost()) closeDingsbums();
@@ -1714,6 +1727,7 @@ const EVENT_TYPES = { cooking: "Live-Cooking", teamevent: "Teamevent" };
 const TRACKING_START = "2026-11-01";
 const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
 let bookingSlot = "";
+let editingEventId = "";
 
 function allEvents() {
   const raw = state.members?.__events || {};
@@ -1773,6 +1787,15 @@ function renderEventCell(month, type) {
   const label = EVENT_TYPES[type];
   const slot = `${month.key}|${type}`;
   const startYear = periodStartYear(`${month.key}-01`);
+  if (event && editingEventId === event.id && event.owner === currentUser && event.status !== "done") {
+    const from = `${startYear}-11-01`, to = `${startYear + 1}-10-31`;
+    const min = from < today() ? today() : from;
+    return `<form class="ev-cell ev-form" data-form="event-edit" data-id="${event.id}">
+      <label>Neues Datum<input type="date" name="date" min="${min}" max="${to}" value="${event.date}" required data-keep-focus></label>
+      <label>Was / Wo (optional)<input name="title" maxlength="60" value="${esc(event.title || "")}" data-keep-focus></label>
+      <div class="ev-actions"><button class="button primary small" type="submit">Speichern</button><button class="button ghost small" type="button" data-action="event-cancel-form">Abbrechen</button></div>
+    </form>`;
+  }
   if (event) {
     const mine = event.owner === currentUser;
     const due = event.date <= today();
@@ -1783,7 +1806,7 @@ function renderEventCell(month, type) {
         <div class="ev-actions">
           ${!mine && due ? `<button class="button secondary small" type="button" data-action="event-done" data-id="${event.id}">✓ Durchgeführt</button>` : ""}
           ${!mine && !due ? `<span class="ev-meta">abhaken ab ${formatShortDate(event.date)}</span>` : ""}
-          ${mine ? `<span class="ev-meta">Abhaken durch andere</span><button class="button ghost small" type="button" data-action="event-delete" data-id="${event.id}">Löschen</button>` : ""}
+          ${mine ? `<span class="ev-meta">Abhaken durch andere</span><button class="button secondary small" type="button" data-action="event-edit" data-id="${event.id}">Ändern</button><button class="button ghost small" type="button" data-action="event-delete" data-id="${event.id}">Löschen</button>` : ""}
         </div>`}
     </div>`;
   }
@@ -1850,6 +1873,30 @@ function bookEvent(type, date, title) {
   }).catch(reportWriteError);
 }
 
+function updateEvent(id, date, title) {
+  const current = allEvents().find(item => item.id === id);
+  if (!current || current.owner !== currentUser || current.status === "done") return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < today()) return showToast("Bitte ein Datum ab heute wählen");
+  const startYear = periodStartYear(current.date);
+  if (periodStartYear(date) !== startYear) return showToast("Datum muss in derselben Periode (Nov–Okt) liegen");
+  let problem = "";
+  store.transact(raw => {
+    const events = raw.members?.__events || {};
+    const target = events[id];
+    if (!target || target.owner !== currentUser || target.status === "done") { problem = "Termin nicht mehr änderbar"; return false; }
+    const clash = Object.values(events).some(item => item && item.id !== id && item.status !== "deleted" && item.type === target.type && item.date.slice(0, 7) === date.slice(0, 7));
+    if (clash) { problem = "Dieser Monat ist bereits belegt"; return false; }
+    target.date = date;
+    target.title = title.slice(0, 60);
+    target.updatedAt = Date.now();
+  }).then(() => {
+    if (problem) return showToast(problem);
+    editingEventId = "";
+    showToast(`Termin auf ${formatShortDate(date)} geändert`);
+    render();
+  }).catch(reportWriteError);
+}
+
 function markEventDone(id) {
   const event = allEvents().find(item => item.id === id);
   if (!event || event.owner === currentUser || event.date > today()) return;
@@ -1866,18 +1913,149 @@ function deleteEvent(id) {
 app.addEventListener("click", event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action === "event-open-form") { bookingSlot = event.target.closest("[data-slot]").dataset.slot; render(); }
-  if (action === "event-cancel-form") { bookingSlot = ""; render(); }
+  if (action === "event-cancel-form") { bookingSlot = ""; editingEventId = ""; render(); }
+  if (action === "event-edit") { editingEventId = event.target.closest("[data-id]").dataset.id; bookingSlot = ""; render(); }
   if (action === "event-done") markEventDone(event.target.closest("[data-id]").dataset.id);
   if (action === "event-delete") deleteEvent(event.target.closest("[data-id]").dataset.id);
 });
 
 app.addEventListener("submit", event => {
+  const edit = event.target.closest("[data-form='event-edit']");
+  if (edit) {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(edit));
+    return updateEvent(edit.dataset.id, data.date, (data.title || "").trim());
+  }
   const form = event.target.closest("[data-form='event-book']");
   if (!form) return;
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
   bookEvent(form.dataset.type, data.date, (data.title || "").trim());
 });
+
+// ===================== Glücksrad mit Ton =====================
+const SPIN_MS = 5200;
+const WHEEL_COLORS = ["#f36f21", "#ffae79", "#ffe0ce", "#e55a10", "#ffc9a6", "#fff1e8"];
+let wheelBusyUntil = 0;
+let wheelRenderTimer = null;
+const spunWheels = new Set();
+let audioCtx = null;
+
+function unlockAudio() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch { audioCtx = null; }
+}
+["pointerdown", "keydown", "touchstart"].forEach(type => document.addEventListener(type, unlockAudio, { passive: true }));
+
+function playTick() {
+  if (!audioCtx || audioCtx.state !== "running") return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+  osc.type = "square"; osc.frequency.setValueAtTime(1300, t);
+  gain.gain.setValueAtTime(.06, t); gain.gain.exponentialRampToValueAtTime(.0001, t + .035);
+  osc.connect(gain).connect(audioCtx.destination); osc.start(t); osc.stop(t + .04);
+}
+
+function playPing() {
+  if (!audioCtx || audioCtx.state !== "running") return;
+  const t = audioCtx.currentTime;
+  // kurzer Trommelwirbel-Abschluss + heller Ping
+  const noise = audioCtx.createBuffer(1, audioCtx.sampleRate * .25, audioCtx.sampleRate);
+  const data = noise.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length / 4));
+  const src = audioCtx.createBufferSource(), ng = audioCtx.createGain();
+  src.buffer = noise; ng.gain.value = .35; src.connect(ng).connect(audioCtx.destination); src.start(t);
+  [880, 1320, 1760].forEach((freq, index) => {
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+    osc.type = "sine"; osc.frequency.setValueAtTime(freq, t + .08);
+    gain.gain.setValueAtTime(0, t); gain.gain.linearRampToValueAtTime(.22 / (index + 1), t + .1);
+    gain.gain.exponentialRampToValueAtTime(.0001, t + 1.6);
+    osc.connect(gain).connect(audioCtx.destination); osc.start(t + .08); osc.stop(t + 1.7);
+  });
+}
+
+function shortLabel(text) {
+  return text.length > 13 ? `${text.slice(0, 12)}…` : text;
+}
+
+function wheelHtml(type, options) {
+  const list = options.length ? options : ["?"];
+  const seg = 360 / list.length;
+  const r = 100;
+  const point = angle => [r + r * Math.sin(angle * Math.PI / 180), r - r * Math.cos(angle * Math.PI / 180)];
+  const slices = list.map((label, index) => {
+    const a0 = index * seg, a1 = (index + 1) * seg, mid = a0 + seg / 2;
+    const [x0, y0] = point(a0), [x1, y1] = point(a1);
+    const path = list.length === 1 ? `<circle cx="${r}" cy="${r}" r="${r}" fill="${WHEEL_COLORS[0]}"/>` : `<path d="M${r},${r} L${x0},${y0} A${r},${r} 0 ${seg > 180 ? 1 : 0},1 ${x1},${y1} Z" fill="${WHEEL_COLORS[index % WHEEL_COLORS.length]}" stroke="white" stroke-width="1.5"/>`;
+    return `${path}<text x="${r}" y="${r - 58}" transform="rotate(${mid} ${r} ${r})" text-anchor="middle" dominant-baseline="middle" class="wheel-label">${esc(shortLabel(label))}</text>`;
+  }).join("");
+  return `<div class="wheel-wrap"><div class="wheel-pointer"></div><svg class="wheel-svg" data-wheel="${type}" viewBox="0 0 200 200">${slices}</svg><div class="wheel-hub"></div></div>`;
+}
+
+// gleiche Zufallszahl auf allen Geräten (aus Zeitstempel)
+function seeded(value) {
+  const x = Math.sin(value) * 10000;
+  return x - Math.floor(x);
+}
+
+function wheelTarget(type) {
+  const draw = state.current.draw || {};
+  const options = draw[`${type}Options`] || [];
+  const index = Math.max(0, options.indexOf(draw[type]));
+  const seg = 360 / Math.max(1, options.length);
+  const jitter = (seeded(draw[`${type}SpinAt`] || 1) - .5) * seg * .6;
+  return 360 * 6 - (index * seg + seg / 2) - jitter;
+}
+
+function currentRotation(element) {
+  const matrix = getComputedStyle(element).transform;
+  if (!matrix || matrix === "none") return 0;
+  const [a, b] = matrix.slice(7, -1).split(",").map(Number);
+  return (Math.atan2(b, a) * 180 / Math.PI + 360) % 360;
+}
+
+function mountWheels() {
+  ["game", "host"].forEach(type => {
+    const svg = document.querySelector(`[data-wheel="${type}"]`);
+    if (!svg) return;
+    const draw = state.current.draw || {};
+    const spinAt = draw[`${type}SpinAt`];
+    const result = draw[type];
+    if (!spinAt || !result) return;
+    const target = wheelTarget(type);
+    const key = `${state.current.id}|${type}|${spinAt}`;
+    const fresh = !spunWheels.has(key) && Date.now() - spinAt < 20000;
+    if (!fresh) { svg.style.transform = `rotate(${target}deg)`; return; }
+    spunWheels.add(key);
+    const label = document.querySelector(`[data-wheel-result="${type}"]`);
+    if (label) label.textContent = "…";
+    wheelBusyUntil = Date.now() + SPIN_MS + 300;
+    svg.style.transition = "none";
+    svg.style.transform = "rotate(0deg)";
+    svg.getBoundingClientRect();
+    svg.style.transition = `transform ${SPIN_MS}ms cubic-bezier(.12,.62,.08,1)`;
+    svg.style.transform = `rotate(${target}deg)`;
+    const seg = 360 / Math.max(1, (draw[`${type}Options`] || [1]).length);
+    let lastIndex = -1, lastAngle = 0, turns = 0;
+    const started = performance.now();
+    const step = now => {
+      const angle = currentRotation(svg);
+      if (angle < lastAngle - 180) turns += 1;
+      lastAngle = angle;
+      const index = Math.floor(((360 - angle) % 360) / seg);
+      if (index !== lastIndex) { if (lastIndex !== -1) playTick(); lastIndex = index; }
+      if (now - started < SPIN_MS) requestAnimationFrame(step);
+      else {
+        playPing();
+        if (label) { label.textContent = result; label.classList.add("revealed"); }
+        svg.closest(".wheel-wrap")?.classList.add("done");
+      }
+    };
+    requestAnimationFrame(step);
+  });
+}
 
 render();
 connect();

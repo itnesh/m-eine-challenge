@@ -387,3 +387,19 @@ td strong { white-space: nowrap; }
 .ev-total strong { display: block; font-size: 24px; letter-spacing: -.02em; }
 .ev-total span { opacity: .85; font-size: 14px; }
 .ev-wine b { margin-left: 4px; font-size: 14px; }
+.history-extra { margin: 10px 0 0; color: var(--muted); }
+.history-scores { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-top: 14px; }
+.history-score { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px 10px; border-radius: 10px; background: var(--canvas); }
+.history-score span { font-weight: 800; color: var(--muted); }
+.history-score.plus span { color: var(--orange-dark); }
+.history-score.minus span { color: #c0392b; }
+.history-score small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; line-height: 1.3; }
+/* Glücksrad */
+.wheel-wrap { position: relative; width: min(260px, 100%); aspect-ratio: 1; margin: 14px auto 18px; }
+.wheel-svg { width: 100%; height: 100%; border-radius: 50%; box-shadow: 0 10px 30px rgba(243,111,33,.25), inset 0 0 0 4px white; background: white; }
+.wheel-label { fill: #3b2a1f; font-size: 9px; font-weight: 800; }
+.wheel-pointer { position: absolute; top: -6px; left: 50%; z-index: 2; width: 0; height: 0; transform: translateX(-50%); border-left: 13px solid transparent; border-right: 13px solid transparent; border-top: 24px solid var(--ink); filter: drop-shadow(0 2px 2px rgba(0,0,0,.25)); }
+.wheel-hub { position: absolute; top: 50%; left: 50%; width: 22%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%; background: white; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+.wheel-wrap.done .wheel-hub { background: var(--orange); }
+.draw-result.revealed { animation: pop .5s ease; }
+@keyframes pop { 0% { transform: scale(.7); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
