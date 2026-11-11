@@ -403,3 +403,11 @@ td strong { white-space: nowrap; }
 .wheel-wrap.done .wheel-hub { background: var(--orange); }
 .draw-result.revealed { animation: pop .5s ease; }
 @keyframes pop { 0% { transform: scale(.7); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
+.board-filter { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-bottom: 26px; padding: 12px 14px; border-radius: 14px; background: white; border: 1px solid var(--line); }
+.board-filter .tool-group { flex-wrap: wrap; }
+.board-filter .tool-group > span { margin-right: 4px; color: var(--muted); font-size: 12px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+.history-details { margin-top: 12px; }
+.history-details summary { cursor: pointer; color: var(--orange-dark); font-weight: 800; }
+.history-details .review-table-wrap { margin-top: 10px; }
+.history-details .term-cell { white-space: nowrap; }
+.history-details .term-value { display: inline-block; max-width: 140px; margin: 0 6px 0 0; vertical-align: middle; }

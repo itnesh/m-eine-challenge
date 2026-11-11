@@ -143,10 +143,15 @@ function renderKey() {
   return `${state.current.id}|${state.current.phase}|${state.current.game}|${state.current.letter}|${(state.current.letters || []).join("")}`;
 }
 
+function noteRoundStart() {
+  if (state.current.phase === "play" && ["ABCD-Jagd", "Stadt–Land–Fluss"].includes(state.current.game) && !localRoundStart[state.current.id]) localRoundStart[state.current.id] = Date.now();
+}
+
 function onRemoteState(data) {
   if (document.querySelector("#draw-canvas") && state.current.phase === "play") storeLocalCanvas();
   state = normalizeState(data);
   connected = true;
+  noteRoundStart();
   trackPhase();
   const typing = document.activeElement?.matches("[data-term-cat],[data-abcd-term],#new-category,[data-keep-focus]");
   const drawingNow = state.current.game === "Draw the Picture" && state.current.phase === "play" && document.querySelector("#draw-canvas");
@@ -447,7 +452,7 @@ app.addEventListener("input", event => {
   if (event.target.matches("[data-abcd-term]")) {
     const letter = event.target.dataset.abcdTerm;
     localAbcdTerms[letter] = event.target.value;
-    if (event.target.value.trim() && !localAbcdTimes[letter]) localAbcdTimes[letter] = Date.now();
+    if (event.target.value.trim() && !localAbcdTimes[letter]) localAbcdTimes[letter] = roundElapsedMs();
     if (!event.target.value.trim()) delete localAbcdTimes[letter];
     saveAbcdDraft(false);
     updateRoundConfirmButton();
@@ -456,7 +461,7 @@ app.addEventListener("input", event => {
   if (!event.target.matches("[data-term-cat]")) return;
   const category = event.target.dataset.termCat;
   localTerms[category] = event.target.value;
-  if (event.target.value.trim() && !localTermTimes[category]) localTermTimes[category] = Date.now();
+  if (event.target.value.trim() && !localTermTimes[category]) localTermTimes[category] = roundElapsedMs();
   if (!event.target.value.trim()) delete localTermTimes[category];
   saveSlfDraft(false);
   updateRoundConfirmButton();
@@ -575,11 +580,31 @@ function saveAbcdDraft(finish) {
 
 function saveAbcdDraftNow(finish) {
   if (state.current.phase !== "play") return;
-  const draft = { terms: { ...localAbcdTerms }, termTimes: { ...localAbcdTimes }, updatedAt: Date.now() };
-  if (finish) draft.completedAt = Date.now();
-  const currentPatch = { drafts: { [currentUser]: draft } };
-  if (finish) Object.assign(currentPatch, { endedAt: Date.now(), finisher: currentUser, phase: "review" });
-  syncPatch({ current: currentPatch }, { rerender: finish });
+  const draft = { terms: { ...localAbcdTerms }, termTimes: { ...localAbcdTimes }, relative: true, updatedAt: Date.now() };
+  if (finish) draft.completedAt = roundElapsedMs();
+  syncPatch({ current: { drafts: { [currentUser]: draft } } }, { rerender: false });
+  if (finish) finishRound(draft.completedAt);
+}
+
+// Lokaler Rundenstart: Zeitpunkt, an dem dieses Gerät die laufende Runde erstmals gesehen hat
+const localRoundStart = {};
+function roundElapsedMs() {
+  const id = state.current.id;
+  if (!localRoundStart[id]) localRoundStart[id] = Date.now();
+  return Date.now() - localRoundStart[id];
+}
+
+// Nur der erste "Fertig"-Klick beendet die Runde (Transaktion, kein Überschreiben)
+function finishRound(elapsedMs) {
+  if (!store) return;
+  store.transact(raw => {
+    const current = raw.current;
+    if (!current || current.phase !== "play") return false;
+    current.phase = "review";
+    current.endedAt = Date.now();
+    current.durationMs = elapsedMs;
+    current.finisher = currentUser;
+  }).catch(reportWriteError);
 }
 
 function renderReview() {
@@ -772,11 +797,10 @@ function saveSlfDraft(finish) {
 
 function saveSlfDraftNow(finish) {
   if (state.current.phase !== "play") return;
-  const draft = { terms: { ...localTerms }, termTimes: { ...localTermTimes }, updatedAt: Date.now() };
-  if (finish) draft.completedAt = Date.now();
-  const currentPatch = { drafts: { [currentUser]: draft } };
-  if (finish) Object.assign(currentPatch, { endedAt: Date.now(), finisher: currentUser, phase: "review" });
-  syncPatch({ current: currentPatch }, { rerender: finish });
+  const draft = { terms: { ...localTerms }, termTimes: { ...localTermTimes }, relative: true, updatedAt: Date.now() };
+  if (finish) draft.completedAt = roundElapsedMs();
+  syncPatch({ current: { drafts: { [currentUser]: draft } } }, { rerender: false });
+  if (finish) finishRound(draft.completedAt);
 }
 
 function renderSlfReview() {
@@ -815,8 +839,18 @@ function calculateResults() {
   });
 }
 
+// Zeiten: neu relativ zum Rundenstart (ms, eigene Geräteuhr), alte Runden absolut
+function relSeconds(round, person, value) {
+  if (!value) return null;
+  return (round.drafts[person]?.relative ? value : value - round.startedAt) / 1000;
+}
+function roundDuration(round) {
+  const ms = round.durationMs ?? (round.endedAt - round.startedAt);
+  return Math.max(ms / 1000, 1);
+}
+
 function scoreAbcd(round) {
-  const duration = Math.max((round.endedAt - round.startedAt) / 1000, 1);
+  const duration = roundDuration(round);
   return PEOPLE.map(person => {
     let full = 0, shared = 0, speed = 0;
     round.letters.forEach(letter => {
@@ -825,16 +859,16 @@ function scoreAbcd(round) {
       if (status === "shared") shared += 1;
       if (status !== "invalid") {
         const termTime = round.drafts[person]?.termTimes?.[letter];
-        if (termTime) speed += Math.max(0, 1 - (termTime-round.startedAt)/1000/duration) * .25;
+        if (termTime) speed += Math.max(0, 1 - relSeconds(round, person, termTime)/duration) * .25;
       }
     });
-    const elapsed = round.drafts[person]?.completedAt ? (round.drafts[person].completedAt - round.startedAt) / 1000 : duration + 999;
+    const elapsed = round.drafts[person]?.completedAt ? relSeconds(round, person, round.drafts[person].completedAt) : duration + 999;
     return { person, raw: full + shared*.5 + speed, elapsed, detail: `${full} voll · ${shared} geteilt${elapsed < duration+999 ? ` · ${formatSeconds(elapsed)}` : ""}` };
   });
 }
 
 function scoreSlf(round) {
-  const duration = Math.max((round.endedAt - round.startedAt) / 1000, 1);
+  const duration = roundDuration(round);
   return PEOPLE.map(person => {
     let full = 0, shared = 0, speed = 0;
     round.categories.forEach(category => {
@@ -843,11 +877,11 @@ function scoreSlf(round) {
       if (status === "shared") shared += 1;
       if (status !== "invalid") {
         const termTime = round.drafts[person]?.termTimes?.[category];
-        if (termTime) speed += Math.max(0, 1 - (termTime - round.startedAt) / 1000 / duration) * .5;
+        if (termTime) speed += Math.max(0, 1 - relSeconds(round, person, termTime) / duration) * .5;
       }
     });
     const completedAt = round.drafts[person]?.completedAt;
-    const elapsed = completedAt ? (completedAt - round.startedAt) / 1000 : duration + 999;
+    const elapsed = completedAt ? relSeconds(round, person, completedAt) : duration + 999;
     return { person, raw: full + shared*.5 + speed, elapsed, detail: `${full} voll · ${shared} geteilt${completedAt ? ` · ${formatSeconds(elapsed)}` : ""}` };
   });
 }
@@ -896,14 +930,15 @@ function renderScoreList(scores) {
   return `<div class="score-list">${scores.map((entry,index) => `<div class="score-row"><span class="rank">${String(index+1).padStart(2,"0")}</span><strong>${esc(entry.person)}<small>${esc(entry.detail || `${entry.games || 0} Spiele`)}</small></strong><span class="points">${entry.points} Pkt.</span></div>`).join("")}</div>`;
 }
 
-function evergreenScores(includeCurrent = false) {
+function evergreenScores(includeCurrent = false, filter = () => true) {
   const totals = PEOPLE.map(person => ({ person, points: 0, games: 0 }));
-  state.history.forEach(week => (week.scores || []).forEach(score => {
+  state.history.filter(week => filter(week.date)).forEach(week => (week.scores || []).forEach(score => {
     const item = totals.find(total => total.person === score.person);
+    if (!item) return;
     item.points += Number(score.points || 0);
     item.games += 1;
   }));
-  if (includeCurrent && state.current.results) state.current.results.forEach(score => {
+  if (includeCurrent && state.current.results && filter(state.current.date)) state.current.results.forEach(score => {
     const item = totals.find(total => total.person === score.person);
     item.points += Number(score.points || 0);
     item.games += 1;
@@ -947,6 +982,7 @@ function saveNextWeek() {
   mutate(next => {
     const old = next.current;
     next.history.unshift({ id: old.id, date: today(), game: old.game, host: old.host, scores: old.results, nextGame: old.draw.game, nextHost: old.draw.host, ...(old.inventions ? { inventions: old.inventions } : {}),
+      ...(["ABCD-Jagd", "Stadt–Land–Fluss"].includes(old.game) ? { letters: old.letters || [], letter: old.letter || null, categories: old.categories || [], terms: Object.fromEntries(Object.entries(old.drafts || {}).map(([person, draft]) => [person, draft.terms || {}])), reviews: Object.fromEntries((old.results || []).map(entry => [entry.person, Object.fromEntries((old.game === "ABCD-Jagd" ? old.letters : old.categories).map(key => [key, old.reviews?.[entry.person]?.terms?.[key] || (old.game === "ABCD-Jagd" ? defaultMatrixStatusForRound(old, "abcd", entry.person, key) : defaultTermStatusForRound(old, entry.person, key))]))])) } : {}),
       ...(old.game === "Dingsbums" ? { sentence: old.secret?.sentence || "", hostVariant: old.secret?.variant || "", variants: old.entries || {}, votes: old.votes || {} } : {}),
       ...(["Stiller Held", "Dümmste Erfindung", "Draw the Picture"].includes(old.game) ? { votes: old.votes || {}, entries: old.entries || {}, pick: old.pick || null, verdict: old.verdict || {} } : {}) });
     next.current = {
@@ -957,10 +993,32 @@ function saveNextWeek() {
   showToast("Nächste Woche ist festgelegt");
 }
 
+let boardYear = "all";
+let boardQuarter = "all";
+function quarterOf(date) { return `Q${Math.ceil(Number(String(date).slice(5, 7)) / 3)}`; }
 function renderLeaderboardPage() {
-  const scores = evergreenScores(Boolean(state.current.results));
-  app.innerHTML = `<section><p class="eyebrow">EVERGREEN</p><h1>Die ewige Rangliste</h1><p class="lead">Alle Challenge-Punkte aus den gespeicherten Wochen.</p><div style="margin-top:32px">${renderScoreList(scores)}</div></section>`;
+  const dates = [...state.history.map(week => week.date), state.current.date].filter(Boolean);
+  const years = [...new Set(dates.map(date => date.slice(0, 4)))].sort().reverse();
+  const filter = date => !!date && (boardYear === "all" || date.slice(0, 4) === boardYear) && (boardQuarter === "all" || quarterOf(date) === boardQuarter);
+  const scores = evergreenScores(Boolean(state.current.results), filter);
+  const weeks = state.history.filter(week => filter(week.date)).length + (state.current.results && filter(state.current.date) ? 1 : 0);
+  const title = boardYear === "all" && boardQuarter === "all" ? "Die ewige Rangliste" : `Rangliste ${boardQuarter !== "all" ? `${boardQuarter} ` : ""}${boardYear !== "all" ? boardYear : "(alle Jahre)"}`;
+  const chip = (kind, value, label, active) => `<button type="button" class="tool ${active ? "active" : ""}" data-board-${kind}="${value}">${label}</button>`;
+  app.innerHTML = `<section>
+    <div class="board-filter">
+      <div class="tool-group"><span>Jahr</span>${chip("year", "all", "Alle", boardYear === "all")}${years.map(year => chip("year", year, year, boardYear === year)).join("")}</div>
+      <div class="tool-group"><span>Quartal</span>${chip("quarter", "all", "Alle", boardQuarter === "all")}${["Q1", "Q2", "Q3", "Q4"].map(q => chip("quarter", q, q, boardQuarter === q)).join("")}</div>
+    </div>
+    <p class="eyebrow">${boardYear === "all" && boardQuarter === "all" ? "EVERGREEN" : "GEFILTERT"}</p><h1>${title}</h1><p class="lead">${weeks} ${weeks === 1 ? "Spiel" : "Spiele"} im gewählten Zeitraum.</p>
+    <div style="margin-top:32px">${weeks ? renderScoreList(scores) : `<div class="empty-state">Keine Spiele in diesem Zeitraum.</div>`}</div>
+  </section>`;
 }
+app.addEventListener("click", event => {
+  const year = event.target.closest("[data-board-year]")?.dataset.boardYear;
+  const quarter = event.target.closest("[data-board-quarter]")?.dataset.boardQuarter;
+  if (year) { boardYear = year; render(); }
+  if (quarter) { boardQuarter = quarter; render(); }
+});
 
 const RULES = [
   { game: "ABCD-Jagd", tagline: "Drei Buchstaben. Drei Gegenstände. Wer ist am schnellsten?",
@@ -1018,11 +1076,26 @@ function renderRulesPage() {
   </section>`;
 }
 
+function renderHistoryMatrix(week) {
+  if (!week.terms || !week.reviews) return "";
+  const keys = week.game === "ABCD-Jagd" ? (week.letters || []) : (week.categories || []);
+  const people = (week.scores || []).map(score => score.person);
+  const mark = { full: ["full", "✓"], shared: ["shared", "½"], invalid: ["invalid", "×"] };
+  return `<details class="history-details"><summary>Details anzeigen${week.letter ? ` · Buchstabe ${esc(week.letter)}` : ""}</summary>
+    <div class="review-table-wrap"><table><thead><tr><th>Person</th>${keys.map(key => `<th>${esc(key)}</th>`).join("")}<th>Pkt.</th></tr></thead><tbody>
+    ${people.map(person => `<tr><td><strong>${esc(person)}</strong></td>${keys.map(key => {
+      const [cls, label] = mark[week.reviews[person]?.[key] || "invalid"];
+      return `<td class="term-cell"><span class="term-value">${esc(week.terms[person]?.[key] || "–")}</span><span class="mini-score ${cls}">${label}</span></td>`;
+    }).join("")}<td><strong>${(week.scores.find(score => score.person === person) || {}).points ?? 0}</strong></td></tr>`).join("")}
+    </tbody></table></div></details>`;
+}
+
 function renderHistoryPage() {
   app.innerHTML = `<section><p class="eyebrow">ARCHIV</p><h1>Vergangene Wochen</h1><p class="lead">Spiele, Spielleitungen und Resultate bleiben erhalten.</p><div class="history-list">${state.history.length ? state.history.map(week => `
     <article class="history-card"><div class="history-top"><div><p class="eyebrow">${esc(week.game)}</p><h3>Spielleitung: ${esc(week.host)}</h3></div><span class="history-date">${formatDate(week.date)}</span></div>
     <div class="history-tags"><span class="tag">Danach: ${esc(week.nextGame)}</span><span class="tag">Nächste Leitung: ${esc(week.nextHost)}</span></div>
     ${week.sentence ? `<p class="history-extra">„${esc(week.sentence)}“ · Variante Spielleitung: <strong>${esc(week.hostVariant)}</strong></p>` : ""}
+    ${renderHistoryMatrix(week)}
     <div class="history-scores">${(week.scores || []).length ? [...week.scores].sort((a, b) => b.points - a.points || a.person.localeCompare(b.person)).map(score => `<div class="history-score ${score.points > 0 ? "plus" : score.points < 0 ? "minus" : ""}"><strong>${esc(score.person)}</strong><span>${score.points} Pkt.</span>${score.detail && score.detail !== "nachgetragen" ? `<small>${esc(score.detail)}</small>` : ""}</div>`).join("") : `<span class="tag">keine Punkte erfasst</span>`}</div></article>`).join("") : `<div class="empty-state"><strong>Noch keine abgeschlossene Woche.</strong><br>Nach der ersten Auslosung erscheint hier die Geschichte.</div>`}</div></section>`;
 }
 
@@ -1030,8 +1103,9 @@ function startVisibleTimer() {
   const clock = document.querySelector("[data-clock]");
   if (!clock || !state.current.startedAt) return;
   const update = () => {
-    const end = state.current.endedAt || Date.now();
-    clock.textContent = formatSeconds((end - state.current.startedAt) / 1000);
+    if (state.current.phase === "play") return void (clock.textContent = formatSeconds(roundElapsedMs() / 1000));
+    const ms = state.current.durationMs ?? ((state.current.endedAt || Date.now()) - state.current.startedAt);
+    clock.textContent = formatSeconds(ms / 1000);
   };
   update();
   timerHandle = setInterval(update,100);
