@@ -362,7 +362,7 @@ function renderHome() {
   app.innerHTML = `
     <section class="hero-week panel">
       <div>
-        <p class="eyebrow">DIESE WOCHE · ${formatWeekRange(state.current.date)}</p>
+        <p class="eyebrow">${formatWeekRange(state.current.date) === formatWeekRange(today()) ? "DIESE WOCHE" : state.current.date > today() ? "NÄCHSTE WOCHE" : "WOCHE"} · ${formatWeekRange(state.current.date)}</p>
         <h1 class="week-line"><span class="game-name">${esc(state.current.game)}</span><small>von ${esc(state.current.host)}</small></h1>
         <p class="lead">${phase === "lobby" ? "Alle loggen sich ein. Sobald das Team bereit ist, startet die Spielleitung die Challenge für alle gleichzeitig." : "Die Challenge ist bereits geöffnet. Steig direkt wieder ein."}</p>
         <div class="button-row"><button class="button primary large" type="button" data-action="enter-game">${actionLabel}</button></div>
@@ -976,6 +976,13 @@ function drawNext(type) {
   });
 }
 
+// Die festgelegte Woche gilt für die nächste Woche (Abschluss erfolgt am Spieltag)
+function nextWeekDate() {
+  const date = new Date(`${today()}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 7);
+  return date.toISOString().slice(0, 10);
+}
+
 function saveNextWeek() {
   if (!isHost() || !state.current.draw.game || !state.current.draw.host || state.current.draw.game === state.current.game) return;
   inGame = false;
@@ -986,7 +993,7 @@ function saveNextWeek() {
       ...(old.game === "Dingsbums" ? { sentence: old.secret?.sentence || "", hostVariant: old.secret?.variant || "", variants: old.entries || {}, votes: old.votes || {} } : {}),
       ...(["Stiller Held", "Dümmste Erfindung", "Draw the Picture"].includes(old.game) ? { votes: old.votes || {}, entries: old.entries || {}, pick: old.pick || null, verdict: old.verdict || {} } : {}) });
     next.current = {
-      id: `week-${Date.now()}`, date: today(), game: old.draw.game, host: old.draw.host, phase: "lobby", letters: [], letter: null,
+      id: `week-${Date.now()}`, date: nextWeekDate(), game: old.draw.game, host: old.draw.host, phase: "lobby", letters: [], letter: null,
       categories: ["Stadt", "Land", "Fluss"], startedAt: null, endedAt: null, finisher: null, drafts: {}, reviews: {}, votes: {}, tieCandidates: [], results: null, draw: { game:null, host:null }
     };
   });
